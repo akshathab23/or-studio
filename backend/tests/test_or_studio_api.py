@@ -319,6 +319,48 @@ def test_multi_period_10_row_36_period_and_15_product_completeness():
     assert len(unique_prods) == 15
 
 
+def test_multi_period_15_products_10_periods_nonzero_inventory():
+    # 15 products x 10 periods (150 rows), with higher production cost in periods 6 & 10
+    # so the solver holds non-zero ending inventory across multiple periods.
+    rows = ["product,period,demand,prod_cost,inv_cost,setup_cost,capacity"]
+    periods = [f"2025-{m:02d}" for m in range(1, 11)]
+    for p_idx in range(1, 16):
+        for idx, per in enumerate(periods, start=1):
+            dem = 15 + p_idx
+            pc = 25 if idx in (6, 10) else 10
+            cap = dem * 2 + 10
+            rows.append(f"SKU_{p_idx:02d},{per},{dem},{pc},2,5,{cap}")
+    ds = upload_dataset("prod_15x10.csv", "\n".join(rows).encode("utf-8"))
+    sol = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="product",
+                period="period",
+                demand="demand",
+                production_cost="prod_cost",
+                inventory_cost="inv_cost",
+                setup_cost="setup_cost",
+                capacity="capacity",
+            ),
+        )
+    )
+    assert sol.is_optimal is True
+    assert sol.constraints_feasible is True
+    assert [p["period"] for p in sol.period_summary] == periods
+    assert len({r["product"] for r in sol.production_schedule}) == 15
+    assert (sol.total_ending_inventory or 0) > 0
+    nonzero_inv_periods = sum(
+        1 for p in sol.period_summary if p["total_ending_inventory"] > 0
+    )
+    assert nonzero_inv_periods >= 2
+    assert sol.cost_breakdown is not None
+    assert set(sol.cost_breakdown.keys()) == {"production_cost", "inventory_cost", "setup_cost"}
+    sum_period_cost = sum(p["total_cost"] for p in sol.period_summary)
+    assert sol.objective_value is not None
+    assert abs(sum_period_cost - sol.objective_value) < 1e-3
+
+
 def test_goal_programming_weighted_and_preemptive():
     base = dict(
         variables=[

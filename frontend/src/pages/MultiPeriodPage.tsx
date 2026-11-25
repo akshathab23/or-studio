@@ -92,6 +92,12 @@ export const MultiPeriodPage: React.FC = () => {
     [dataset]
   );
 
+  const columnUniqueMap = useMemo(() => {
+    const m = new Map<string, number>();
+    dataset?.columns.forEach((c) => m.set(c.name, c.unique_count));
+    return m;
+  }, [dataset]);
+
   const { productProductionTraces, productInventoryTraces, periodCostTraces } = useMemo(() => {
     if (!mpSolution?.is_optimal || mpSolution.production_schedule.length === 0) {
       return {
@@ -167,6 +173,7 @@ export const MultiPeriodPage: React.FC = () => {
         name: 'Production Cost',
         type: 'bar',
         marker: { color: '#2563eb' },
+        hovertemplate: 'Production Cost: %{y:,.2f}<extra></extra>',
       });
     }
     if (hasInvCostCol) {
@@ -176,6 +183,7 @@ export const MultiPeriodPage: React.FC = () => {
         name: 'Inventory Cost',
         type: 'bar',
         marker: { color: '#0f172a' },
+        hovertemplate: 'Inventory Cost: %{y:,.2f}<extra></extra>',
       });
     }
     if (hasSetupCostCol) {
@@ -185,6 +193,7 @@ export const MultiPeriodPage: React.FC = () => {
         name: 'Setup Cost',
         type: 'bar',
         marker: { color: '#f59e0b' },
+        hovertemplate: 'Setup Cost: %{y:,.2f}<extra></extra>',
       });
     }
 
@@ -196,33 +205,82 @@ export const MultiPeriodPage: React.FC = () => {
   }, [mpSolution]);
 
   const periodTickAngle =
-    (mpSolution?.period_summary.length ?? 0) > 10 ? -35 : 0;
+    (mpSolution?.period_summary.length ?? 0) > 6 ? -40 : 0;
+
+  const formatCostLabel = (key: string): string => {
+    const map: Record<string, string> = {
+      production_cost: 'Production Cost',
+      inventory_cost: 'Inventory Cost',
+      setup_cost: 'Setup Cost',
+    };
+    return (
+      map[key] ??
+      key
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+    );
+  };
+
+  const productCountLabel = (n: number) => (n === 1 ? '1 product' : `${n} products`);
 
   const renderResultCharts = () => {
     if (!mpSolution?.is_optimal) return null;
+    const topHorizontalLegend = {
+      orientation: 'h',
+      x: 0,
+      y: 1.02,
+      xanchor: 'left',
+      yanchor: 'bottom',
+      font: { size: 11 },
+    };
+    const multiProductLegend =
+      productProductionTraces.length > 6
+        ? { orientation: 'v', x: 1.02, y: 1, font: { size: 11 } }
+        : topHorizontalLegend;
+    const zeroTotalInventory = (mpSolution.total_ending_inventory ?? 0) <= 1e-6;
+
+    const costEntries = mpSolution.cost_breakdown
+      ? Object.entries(mpSolution.cost_breakdown)
+      : [];
+
     return (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {productProductionTraces.length > 0 && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+            <h4 className="mb-2 text-sm font-semibold text-slate-900">
+              Production by Product and Period ({productCountLabel(productProductionTraces.length)})
+            </h4>
             <PlotlyChart
-              height={productProductionTraces.length > 12 ? 400 : 340}
+              height={productProductionTraces.length > 10 ? 400 : 330}
               data={productProductionTraces}
               layout={{
-                title: {
-                  text: `Production by Product and Period (${productProductionTraces.length} products)`,
-                },
                 barmode: 'group',
                 hovermode: 'x unified',
-                margin: { t: 48, r: 24, b: periodTickAngle ? 72 : 56, l: 60 },
-                xaxis: { title: 'Period', type: 'category', tickangle: periodTickAngle },
-                yaxis: { title: 'Production Units' },
+                legend: multiProductLegend,
+                margin: {
+                  t: productProductionTraces.length > 6 ? 16 : 48,
+                  r: productProductionTraces.length > 6 ? 105 : 16,
+                  b: periodTickAngle ? 72 : 48,
+                  l: 56,
+                },
+                xaxis: {
+                  title: 'Period',
+                  type: 'category',
+                  tickangle: periodTickAngle,
+                  automargin: true,
+                },
+                yaxis: { title: 'Production Units', automargin: true },
               }}
             />
           </div>
         )}
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+        <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+          <h4 className="mb-2 text-sm font-semibold text-slate-900">
+            Demand vs. Production by Period
+          </h4>
           <PlotlyChart
+            height={330}
             data={[
               {
                 x: mpSolution.period_summary.map((p) => p.period),
@@ -230,6 +288,7 @@ export const MultiPeriodPage: React.FC = () => {
                 name: 'Total Demand',
                 type: 'bar',
                 marker: { color: '#94a3b8' },
+                hovertemplate: 'Total Demand: %{y:,.2f}<extra></extra>',
               },
               {
                 x: mpSolution.period_summary.map((p) => p.period),
@@ -237,39 +296,65 @@ export const MultiPeriodPage: React.FC = () => {
                 name: 'Total Production',
                 type: 'bar',
                 marker: { color: '#2563eb' },
+                hovertemplate: 'Total Production: %{y:,.2f}<extra></extra>',
               },
             ]}
             layout={{
-              title: { text: 'Demand vs. Production by Period' },
               barmode: 'group',
               hovermode: 'x unified',
-              margin: { t: 48, r: 24, b: periodTickAngle ? 72 : 56, l: 60 },
-              xaxis: { title: 'Period', type: 'category', tickangle: periodTickAngle },
-              yaxis: { title: 'Units' },
+              legend: topHorizontalLegend,
+              margin: { t: 48, r: 16, b: periodTickAngle ? 72 : 48, l: 56 },
+              xaxis: {
+                title: 'Period',
+                type: 'category',
+                tickangle: periodTickAngle,
+                automargin: true,
+              },
+              yaxis: { title: 'Units', automargin: true },
             }}
           />
         </div>
 
         {productInventoryTraces.length > 0 && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+            <h4 className="mb-2 text-sm font-semibold text-slate-900">
+              Ending Inventory by Product and Period ({productCountLabel(productInventoryTraces.length)})
+            </h4>
             <PlotlyChart
-              height={productInventoryTraces.length > 12 ? 400 : 340}
+              height={productInventoryTraces.length > 10 ? 400 : 330}
               data={productInventoryTraces}
               layout={{
-                title: {
-                  text: `Ending Inventory by Product and Period (${productInventoryTraces.length} products)`,
-                },
                 hovermode: 'x unified',
-                margin: { t: 48, r: 24, b: periodTickAngle ? 72 : 56, l: 60 },
-                xaxis: { title: 'Period', type: 'category', tickangle: periodTickAngle },
-                yaxis: { title: 'Inventory Units' },
+                legend: multiProductLegend,
+                margin: {
+                  t: productInventoryTraces.length > 6 ? 16 : 48,
+                  r: productInventoryTraces.length > 6 ? 105 : 16,
+                  b: periodTickAngle ? 72 : 48,
+                  l: 56,
+                },
+                xaxis: {
+                  title: 'Period',
+                  type: 'category',
+                  tickangle: periodTickAngle,
+                  automargin: true,
+                },
+                yaxis: { title: 'Inventory Units', automargin: true },
               }}
             />
+            {zeroTotalInventory && (
+              <p className="mt-2 text-xs text-slate-500">
+                Just-in-time optimal plan: available capacity meets demand in every period with zero ending inventory held.
+              </p>
+            )}
           </div>
         )}
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+        <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+          <h4 className="mb-2 text-sm font-semibold text-slate-900">
+            Aggregate Ending Inventory Over Periods
+          </h4>
           <PlotlyChart
+            height={330}
             data={[
               {
                 x: mpSolution.period_summary.map((p) => p.period),
@@ -279,61 +364,91 @@ export const MultiPeriodPage: React.FC = () => {
                 mode: 'lines+markers',
                 line: { color: '#0f172a', width: 2.5 },
                 marker: { size: 7, color: '#2563eb' },
+                hovertemplate: 'Ending Inventory: %{y:,.2f}<extra></extra>',
               },
             ]}
             layout={{
-              title: { text: 'Aggregate Ending Inventory Over Periods' },
               hovermode: 'x unified',
-              margin: { t: 48, r: 24, b: periodTickAngle ? 72 : 56, l: 60 },
-              xaxis: { title: 'Period', type: 'category', tickangle: periodTickAngle },
-              yaxis: { title: 'Inventory Units' },
+              margin: { t: 16, r: 16, b: periodTickAngle ? 72 : 48, l: 56 },
+              xaxis: {
+                title: 'Period',
+                type: 'category',
+                tickangle: periodTickAngle,
+                automargin: true,
+              },
+              yaxis: { title: 'Inventory Units', automargin: true },
             }}
           />
+          {zeroTotalInventory && (
+            <p className="mt-2 text-xs text-slate-500">
+              Aggregate ending inventory is 0 across all periods because holding inventory incurs positive cost while capacity is sufficient.
+            </p>
+          )}
         </div>
 
         {periodCostTraces.length > 0 && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+            <h4 className="mb-2 text-sm font-semibold text-slate-900">
+              Cost Breakdown by Period
+            </h4>
             <PlotlyChart
+              height={330}
               data={periodCostTraces}
               layout={{
-                title: { text: 'Cost Breakdown by Period' },
                 barmode: 'stack',
                 hovermode: 'x unified',
-                margin: { t: 48, r: 24, b: periodTickAngle ? 72 : 56, l: 64 },
-                xaxis: { title: 'Period', type: 'category', tickangle: periodTickAngle },
-                yaxis: { title: 'Cost' },
+                legend: topHorizontalLegend,
+                margin: { t: 54, r: 16, b: periodTickAngle ? 72 : 48, l: 60 },
+                xaxis: {
+                  title: 'Period',
+                  type: 'category',
+                  tickangle: periodTickAngle,
+                  automargin: true,
+                },
+                yaxis: { title: 'Cost', automargin: true },
               }}
             />
           </div>
         )}
 
-        {mpSolution.cost_breakdown &&
-          Object.keys(mpSolution.cost_breakdown).length > 0 && (
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-              <PlotlyChart
-                data={[
-                  {
-                    x: Object.keys(mpSolution.cost_breakdown).map((k) =>
-                      k.replace(/_/g, ' ').toUpperCase()
-                    ),
-                    y: Object.values(mpSolution.cost_breakdown),
-                    type: 'bar',
-                    marker: { color: ['#2563eb', '#0f172a', '#f59e0b'] },
-                  },
-                ]}
-                layout={{
-                  title: { text: 'Total Cost Summary Breakdown' },
-                  xaxis: { title: 'Cost Component', type: 'category' },
-                  yaxis: { title: 'Total Cost' },
-                }}
-              />
-            </div>
-          )}
+        {costEntries.length > 0 && (
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+            <h4 className="mb-2 text-sm font-semibold text-slate-900">
+              Total Cost Summary Breakdown
+            </h4>
+            <PlotlyChart
+              height={330}
+              data={[
+                {
+                  type: 'bar',
+                  orientation: 'h',
+                  y: costEntries.map(([k]) => formatCostLabel(k)),
+                  x: costEntries.map(([, v]) => v),
+                  text: costEntries.map(([, v]) =>
+                    Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })
+                  ),
+                  textposition: 'outside',
+                  cliponaxis: false,
+                  marker: { color: ['#2563eb', '#0f172a', '#f59e0b'] },
+                  hovertemplate: '%{y}: %{x:,.2f}<extra></extra>',
+                },
+              ]}
+              layout={{
+                margin: { t: 16, r: 72, b: 48, l: 112 },
+                xaxis: { title: 'Total Cost', automargin: true },
+                yaxis: { automargin: true, autorange: 'reversed' },
+              }}
+            />
+          </div>
+        )}
 
         {mpSolution.resource_utilization.length > 0 && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs lg:col-span-2">
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs lg:col-span-2">
+            <h4 className="mb-2 text-sm font-semibold text-slate-900">
+              Capacity & Resource Utilization (%) — {mpSolution.resource_utilization.length} entries
+            </h4>
             <PlotlyChart
-              height={360}
+              height={350}
               data={[
                 {
                   x: mpSolution.resource_utilization.map(
@@ -343,22 +458,25 @@ export const MultiPeriodPage: React.FC = () => {
                   name: 'Utilization %',
                   type: 'bar',
                   marker: { color: '#2563eb' },
+                  hovertemplate: '%{x}: %{y:.2f}%<extra></extra>',
                 },
               ]}
               layout={{
-                title: { text: 'Capacity & Resource Utilization (%)' },
                 margin: {
-                  t: 48,
-                  r: 24,
-                  b: mpSolution.resource_utilization.length > 12 ? 90 : 60,
-                  l: 60,
+                  t: 16,
+                  r: 16,
+                  b: mpSolution.resource_utilization.length > 12 ? 96 : 56,
+                  l: 56,
                 },
                 xaxis: {
                   title: 'Resource / Period',
                   type: 'category',
-                  tickangle: mpSolution.resource_utilization.length > 12 ? -40 : 0,
+                  automargin: true,
+                  tickmode: 'auto',
+                  nticks: mpSolution.resource_utilization.length > 15 ? 8 : undefined,
+                  tickangle: mpSolution.resource_utilization.length > 10 ? -35 : 0,
                 },
-                yaxis: { title: 'Utilization (%)', range: [0, 110] },
+                yaxis: { title: 'Utilization (%)', range: [0, 110], automargin: true },
               }}
             />
           </div>
@@ -532,27 +650,42 @@ export const MultiPeriodPage: React.FC = () => {
                     { key: 'period', label: 'Period *' },
                     { key: 'demand', label: 'Demand *' },
                   ] as const
-                ).map(({ key, label }) => (
-                  <div key={key}>
-                    <label className="mb-1 block text-xs font-medium text-slate-700">
-                      {label}
-                    </label>
-                    <select
-                      value={mapping[key] ?? ''}
-                      onChange={(e) =>
-                        setMapping((prev) => ({ ...prev, [key]: e.target.value }))
-                      }
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-blue-500 focus:outline-none"
-                    >
-                      <option value="">-- Select column --</option>
-                      {columnNames.map((col) => (
-                        <option key={col} value={col}>
-                          {col}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
+                ).map(({ key, label }) => {
+                  const selectedCol = mapping[key] ?? '';
+                  const uniqueCount = selectedCol ? columnUniqueMap.get(selectedCol) : undefined;
+                  return (
+                    <div key={key}>
+                      <div className="mb-1 flex items-center justify-between">
+                        <label className="text-xs font-medium text-slate-700">
+                          {label}
+                        </label>
+                        {uniqueCount !== undefined && (
+                          <span className="font-mono text-[11px] text-slate-500">
+                            {uniqueCount} unique
+                          </span>
+                        )}
+                      </div>
+                      <select
+                        value={selectedCol}
+                        onChange={(e) =>
+                          setMapping((prev) => ({ ...prev, [key]: e.target.value }))
+                        }
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-blue-500 focus:outline-none"
+                      >
+                        <option value="">-- Select column --</option>
+                        {columnNames.map((col) => {
+                          const cnt = columnUniqueMap.get(col);
+                          return (
+                            <option key={col} value={col}>
+                              {col}
+                              {cnt !== undefined ? ` (${cnt} unique)` : ''}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -652,7 +785,7 @@ export const MultiPeriodPage: React.FC = () => {
             <section className="space-y-6">
               {/* Sub-navigation Tabs */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200">
-                <div className="flex gap-1">
+                <div className="flex max-w-full flex-wrap gap-1 overflow-x-auto sm:flex-nowrap">
                   {[
                     { id: 'results', label: 'Results & Schedule', icon: Table2 },
                     { id: 'graphs', label: 'Visualizations', icon: LineChart },
@@ -662,7 +795,7 @@ export const MultiPeriodPage: React.FC = () => {
                       key={id}
                       type="button"
                       onClick={() => setActiveTab(id as typeof activeTab)}
-                      className={`inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                         activeTab === id
                           ? 'border-blue-600 text-blue-700'
                           : 'border-transparent text-slate-600 hover:text-slate-900'

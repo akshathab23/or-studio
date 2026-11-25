@@ -40,7 +40,17 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
     };
 
-    void plotlyApi.react(el, data, mergedLayout, config);
+    void plotlyApi.react(el, data, mergedLayout, config).then(() => {
+      requestAnimationFrame(() => {
+        if (el) {
+          try {
+            plotlyApi.Plots.resize(el);
+          } catch {
+            // ignore resize errors during unmount
+          }
+        }
+      });
+    });
 
     const observer = new ResizeObserver(() => {
       if (el) {
