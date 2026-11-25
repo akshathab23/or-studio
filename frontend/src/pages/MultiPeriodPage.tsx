@@ -34,8 +34,10 @@ export const MultiPeriodPage: React.FC = () => {
   const navigate = useNavigate();
   const {
     dataset,
+    publicImport,
     mpMapping,
     setMpMapping,
+    mpCapacityScope,
     mpSolution,
     setMpSolution,
     addHistoryItem,
@@ -66,6 +68,24 @@ export const MultiPeriodPage: React.FC = () => {
     setValidation(null);
     setError(null);
   }, [dataset?.dataset_id, dataset?.active_sheet]);
+
+  useEffect(() => {
+    if (mpMapping) {
+      setMapping({
+        product: mpMapping.product ?? '',
+        period: mpMapping.period ?? '',
+        demand: mpMapping.demand ?? '',
+        production_cost: mpMapping.production_cost ?? '',
+        inventory_cost: mpMapping.inventory_cost ?? '',
+        capacity: mpMapping.capacity ?? '',
+        processing_time: mpMapping.processing_time ?? '',
+        resource: mpMapping.resource ?? '',
+        initial_inventory: mpMapping.initial_inventory ?? '',
+        setup_cost: mpMapping.setup_cost ?? '',
+        setup_time: mpMapping.setup_time ?? '',
+      });
+    }
+  }, [mpMapping]);
 
   const columnNames = useMemo(
     () => dataset?.columns.map((c) => c.name) ?? [],
@@ -144,7 +164,12 @@ export const MultiPeriodPage: React.FC = () => {
         setSolving(false);
         return;
       }
-      const sol = await solveMultiPeriod(dataset.dataset_id, cleaned, integerProd);
+      const sol = await solveMultiPeriod(
+        dataset.dataset_id,
+        cleaned,
+        integerProd,
+        mpCapacityScope
+      );
       setMpSolution(sol);
       setActiveTab('results');
       addHistoryItem({
@@ -472,7 +497,21 @@ export const MultiPeriodPage: React.FC = () => {
                   {mpSolution.is_optimal && (
                     <>
                       <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3 text-xs text-slate-700">
-                        {mpSolution.message}
+                        <div>{mpSolution.message}</div>
+                        {publicImport && publicImport.dataset.dataset_id === dataset.dataset_id && (
+                          <div className="mt-2 border-t border-blue-200/70 pt-2 text-[11px] text-slate-600">
+                            <span className="font-semibold text-slate-800">
+                              Source & Assumptions ({publicImport.catalog_entry.name}):
+                            </span>{' '}
+                            {publicImport.assumptions
+                              .map(
+                                (a) =>
+                                  `${a.column_name} (${a.origin === 'source_derived' ? 'Source-Derived' : 'Model Assumption'})`
+                              )
+                              .join(' · ')}{' '}
+                            — {publicImport.catalog_entry.license}
+                          </div>
+                        )}
                       </div>
 
                       {/* Result Visualizations (Always visible on Results view) */}

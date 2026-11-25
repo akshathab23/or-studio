@@ -5,14 +5,19 @@ import type {
   MCDMSolveResponse,
   MultiPeriodColumnMapping,
   MultiPeriodSolveResponse,
+  PublicDatasetImportResponse,
   SolutionHistoryItem,
 } from '../types/or';
 
 interface StudioContextValue {
   dataset: DatasetSummary | null;
   setDataset: (ds: DatasetSummary | null) => void;
+  publicImport: PublicDatasetImportResponse | null;
+  setPublicImport: (imp: PublicDatasetImportResponse | null) => void;
   mpMapping: MultiPeriodColumnMapping | null;
   setMpMapping: (m: MultiPeriodColumnMapping | null) => void;
+  mpCapacityScope: 'auto' | 'per_product' | 'aggregate_period';
+  setMpCapacityScope: (s: 'auto' | 'per_product' | 'aggregate_period') => void;
   mpSolution: MultiPeriodSolveResponse | null;
   setMpSolution: (s: MultiPeriodSolveResponse | null) => void;
   gpSolution: GoalProgrammingSolveResponse | null;
@@ -30,7 +35,11 @@ const StudioContext = createContext<StudioContextValue | undefined>(undefined);
 
 export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [dataset, setDataset] = useState<DatasetSummary | null>(null);
+  const [publicImport, setPublicImport] = useState<PublicDatasetImportResponse | null>(null);
   const [mpMapping, setMpMapping] = useState<MultiPeriodColumnMapping | null>(null);
+  const [mpCapacityScope, setMpCapacityScope] = useState<
+    'auto' | 'per_product' | 'aggregate_period'
+  >('auto');
   const [mpSolution, setMpSolution] = useState<MultiPeriodSolveResponse | null>(null);
   const [gpSolution, setGpSolution] = useState<GoalProgrammingSolveResponse | null>(null);
   const [mcdmSolution, setMcdmSolution] = useState<MCDMSolveResponse | null>(null);
@@ -74,8 +83,12 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       value={{
         dataset,
         setDataset,
+        publicImport,
+        setPublicImport,
         mpMapping,
         setMpMapping,
+        mpCapacityScope,
+        setMpCapacityScope,
         mpSolution,
         setMpSolution,
         gpSolution,

@@ -8,6 +8,9 @@ import type {
   MappingValidationResponse,
   MultiPeriodColumnMapping,
   MultiPeriodSolveResponse,
+  PublicDatasetCatalogItem,
+  PublicDatasetImportRequest,
+  PublicDatasetImportResponse,
 } from '../types/or';
 
 const rawBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? '';
@@ -89,7 +92,8 @@ export async function validateMultiPeriodMapping(
 export async function solveMultiPeriod(
   datasetId: string,
   mapping: MultiPeriodColumnMapping,
-  integerProduction: boolean
+  integerProduction: boolean,
+  capacityScope: 'auto' | 'per_product' | 'aggregate_period' = 'auto'
 ): Promise<MultiPeriodSolveResponse> {
   const res = await fetch(`${API_BASE}/solve/multi-period`, {
     method: 'POST',
@@ -98,9 +102,26 @@ export async function solveMultiPeriod(
       dataset_id: datasetId,
       mapping,
       integer_production: integerProduction,
+      capacity_scope: capacityScope,
     }),
   });
   return handleResponse<MultiPeriodSolveResponse>(res);
+}
+
+export async function fetchPublicDatasets(): Promise<PublicDatasetCatalogItem[]> {
+  const res = await fetch(`${API_BASE}/public-datasets`);
+  return handleResponse<PublicDatasetCatalogItem[]>(res);
+}
+
+export async function importPublicDataset(
+  req: PublicDatasetImportRequest
+): Promise<PublicDatasetImportResponse> {
+  const res = await fetch(`${API_BASE}/public-datasets/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return handleResponse<PublicDatasetImportResponse>(res);
 }
 
 export async function solveGoalProgramming(

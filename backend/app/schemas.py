@@ -196,3 +196,64 @@ class MCDMSolveResponse(BaseModel):
     rankings: list[MCDMResultRow]
     formulation: MathFormulationSection
     message: str
+
+
+class PublicDatasetCatalogItem(BaseModel):
+    id: str
+    name: str
+    source: str
+    source_url: str
+    description: str
+    approximate_size: str
+    data_period: str
+    license: str
+    citation: str
+    disclaimer: str
+
+
+class PublicDatasetImportRequest(BaseModel):
+    source_id: Literal["uci_online_retail"] = "uci_online_retail"
+    aggregation_period: Literal["monthly", "weekly", "quarterly"] = "monthly"
+    max_products: int = Field(10, ge=1, le=50)
+    max_periods: int = Field(12, ge=1, le=24)
+    capacity_buffer_pct: float = Field(20.0, ge=0.0, le=500.0)
+    include_production_cost: bool = True
+    production_cost_ratio: float = Field(0.6, ge=0.0, le=10.0)
+    include_inventory_cost: bool = True
+    inventory_cost_ratio: float = Field(0.05, ge=0.0, le=10.0)
+    include_initial_inventory: bool = False
+    initial_inventory_units: float = Field(0.0, ge=0.0)
+
+
+class PreprocessingReport(BaseModel):
+    raw_row_count: int
+    cancelled_invoices_removed: int
+    non_positive_quantity_removed: int
+    invalid_price_removed: int
+    missing_stockcode_removed: int
+    invalid_date_removed: int
+    clean_row_count: int
+    aggregation_period: str
+    products_selected: int
+    periods_created: int
+    prepared_row_count: int
+    date_range_start: str | None
+    date_range_end: str | None
+    cached_source_used: bool
+
+
+class ParameterAssumptionItem(BaseModel):
+    field: str
+    column_name: str
+    origin: Literal["source_derived", "model_assumption"]
+    methodology: str
+    summary: str
+
+
+class PublicDatasetImportResponse(BaseModel):
+    dataset: DatasetSummary
+    catalog_entry: PublicDatasetCatalogItem
+    preprocessing_report: PreprocessingReport
+    assumptions: list[ParameterAssumptionItem]
+    suggested_mapping: MultiPeriodColumnMapping
+    suggested_capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "per_product"

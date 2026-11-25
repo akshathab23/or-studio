@@ -234,6 +234,23 @@ def delete_dataset(dataset_id: str) -> None:
     del _DATASET_STORE[dataset_id]
 
 
+def register_prepared_dataset(filename: str, df: pd.DataFrame) -> DatasetSummary:
+    df_clean = df.copy()
+    df_clean.columns = [str(c).strip() for c in df_clean.columns]
+    dataset_id = str(uuid.uuid4())
+    stored = StoredDataset(
+        dataset_id=dataset_id,
+        filename=filename,
+        file_type="csv",
+        raw_bytes=b"",
+        sheets=[],
+        active_sheet=None,
+        df=df_clean,
+    )
+    _DATASET_STORE[dataset_id] = stored
+    return _build_summary(stored)
+
+
 def validate_multi_period_mapping(
     dataset_id: str,
     mapping: MultiPeriodColumnMapping,

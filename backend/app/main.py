@@ -4,6 +4,7 @@ import os
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from app.schemas import (
     DatasetSummary,
@@ -15,6 +16,9 @@ from app.schemas import (
     MultiPeriodColumnMapping,
     MultiPeriodSolveRequest,
     MultiPeriodSolveResponse,
+    PublicDatasetCatalogItem,
+    PublicDatasetImportRequest,
+    PublicDatasetImportResponse,
     SheetSelectRequest,
 )
 from app.services.dataset_service import (
@@ -28,6 +32,7 @@ from app.services.dataset_service import (
 from app.services.goal_programming_solver import solve_goal_programming
 from app.services.mcdm_solver import solve_mcdm
 from app.services.multi_period_solver import solve_multi_period
+from app.services.public_dataset_service import import_public_dataset, list_public_datasets
 
 app = FastAPI(
     title="OR Studio API",
@@ -151,3 +156,22 @@ def api_solve_mcdm(req: MCDMSolveRequest) -> MCDMSolveResponse:
         return solve_mcdm(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/public-datasets", response_model=list[PublicDatasetCatalogItem])
+def api_list_public_datasets() -> list[PublicDatasetCatalogItem]:
+    return list_public_datasets()
+
+
+@app.post("/api/public-datasets/import", response_model=PublicDatasetImportResponse)
+async def api_import_public_dataset(
+    req: PublicDatasetImportRequest,
+) -> PublicDatasetImportResponse:
+    try:
+        return await run_in_threadpool(import_public_dataset, req)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -209,3 +209,64 @@ export interface SolutionHistoryItem {
   datasetName?: string;
   payload: MultiPeriodSolveResponse | GoalProgrammingSolveResponse | MCDMSolveResponse;
 }
+
+export interface PublicDatasetCatalogItem {
+  id: string;
+  name: string;
+  source: string;
+  source_url: string;
+  description: string;
+  approximate_size: string;
+  data_period: string;
+  license: string;
+  citation: string;
+  disclaimer: string;
+}
+
+export interface PublicDatasetImportRequest {
+  source_id: 'uci_online_retail';
+  aggregation_period: 'monthly' | 'weekly' | 'quarterly';
+  max_products: number;
+  max_periods: number;
+  capacity_buffer_pct: number;
+  include_production_cost: boolean;
+  production_cost_ratio: number;
+  include_inventory_cost: boolean;
+  inventory_cost_ratio: number;
+  include_initial_inventory: boolean;
+  initial_inventory_units: number;
+}
+
+export interface PreprocessingReport {
+  raw_row_count: number;
+  cancelled_invoices_removed: number;
+  non_positive_quantity_removed: number;
+  invalid_price_removed: number;
+  missing_stockcode_removed: number;
+  invalid_date_removed: number;
+  clean_row_count: number;
+  aggregation_period: string;
+  products_selected: number;
+  periods_created: number;
+  prepared_row_count: number;
+  date_range_start: string | null;
+  date_range_end: string | null;
+  cached_source_used: boolean;
+}
+
+export interface ParameterAssumptionItem {
+  field: string;
+  column_name: string;
+  origin: 'source_derived' | 'model_assumption';
+  methodology: string;
+  summary: string;
+}
+
+export interface PublicDatasetImportResponse {
+  dataset: DatasetSummary;
+  catalog_entry: PublicDatasetCatalogItem;
+  preprocessing_report: PreprocessingReport;
+  assumptions: ParameterAssumptionItem[];
+  suggested_mapping: MultiPeriodColumnMapping;
+  suggested_capacity_scope: 'auto' | 'per_product' | 'aggregate_period';
+}
