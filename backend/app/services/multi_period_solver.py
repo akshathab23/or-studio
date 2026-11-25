@@ -60,6 +60,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
 
     # Capacity structures
     cap_period_acc: dict[str, list[float]] = {}
+    cap_prod_period_acc: dict[tuple[str, str], list[float]] = {}
     cap_resource_period_acc: dict[tuple[str, str], list[float]] = {}
     prod_period_resource: dict[tuple[str, str], str] = {}
     resources: list[str] = []
@@ -95,6 +96,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 cap_resource_period_acc.setdefault((r, t), []).append(c_val)
             else:
                 cap_period_acc.setdefault(t, []).append(c_val)
+                cap_prod_period_acc.setdefault((p, t), []).append(c_val)
 
     prod_cost = {k: sum(v) / len(v) for k, v in prod_cost_acc.items()}
     inv_cost = {k: sum(v) / len(v) for k, v in inv_cost_acc.items()}
@@ -102,8 +104,20 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
     setup_cost = {k: sum(v) / len(v) for k, v in setup_cost_acc.items()}
     setup_time = {k: sum(v) / len(v) for k, v in setup_time_acc.items()}
     cap_period = {k: sum(v) / len(v) for k, v in cap_period_acc.items()}
+    cap_prod_period = {k: sum(v) / len(v) for k, v in cap_prod_period_acc.items()}
     cap_resource_period = {k: sum(v) / len(v) for k, v in cap_resource_period_acc.items()}
     repeated_pairs = sum(1 for cnt in pair_row_counts.values() if cnt > 1)
+
+    # Determine capacity scope when Resource is not mapped
+    cap_varies_within_period = any(len(set(vals)) > 1 for vals in cap_period_acc.values())
+    use_per_product_cap = False
+    if has_capacity and not (has_resource and resources):
+        if req.capacity_scope == "per_product":
+            use_per_product_cap = True
+        elif req.capacity_scope == "aggregate_period":
+            use_per_product_cap = False
+        else:
+            use_per_product_cap = cap_varies_within_period
 
     # Construct PuLP model
     prob = pulp.LpProblem("OR_Studio_Multi_Period_Production_Planning", pulp.LpMinimize)
@@ -176,8 +190,22 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                         cap_val = cap_resource_period[(r, t)]
                         prob += pulp.lpSum(lhs_terms) <= cap_val, f"Cap_{r}_{t}"
                         capacity_constraints_meta.append(
-                            {"resource": r, "period": t, "capacity": cap_val}
+                            {"resource": r, "period": t, "capacity": cap_val, "scope": "resource"}
                         )
+        elif use_per_product_cap:
+            for p in products:
+                for t in periods:
+                    if (p, t) not in cap_prod_period:
+                        continue
+                    pt = proc_time.get((p, t), 1.0) if has_proc_time else 1.0
+                    lhs_terms = [pt * x[(p, t)]]
+                    if has_setup_time and (p, t) in setup_time and (p, t) in y:
+                        lhs_terms.append(setup_time[(p, t)] * y[(p, t)])
+                    cap_val = cap_prod_period[(p, t)]
+                    prob += pulp.lpSum(lhs_terms) <= cap_val, f"Cap_{p}_{t}"
+                    capacity_constraints_meta.append(
+                        {"resource": p, "period": t, "capacity": cap_val, "scope": "per_product"}
+                    )
         else:
             for t in periods:
                 if t not in cap_period:
@@ -191,7 +219,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 cap_val = cap_period[t]
                 prob += pulp.lpSum(lhs_terms) <= cap_val, f"Cap_{t}"
                 capacity_constraints_meta.append(
-                    {"resource": "Aggregate", "period": t, "capacity": cap_val}
+                    {"resource": "Aggregate", "period": t, "capacity": cap_val, "scope": "aggregate"}
                 )
 
     # Constraints: 3. Setup linking (exact remaining demand upper bound)
@@ -324,9 +352,12 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
             r = meta["resource"]
             t = meta["period"]
             cap_val = meta["capacity"]
+            scope = meta.get("scope", "aggregate")
             used = 0.0
             for p in products:
-                if has_resource and resources and prod_period_resource.get((p, t)) != r:
+                if scope == "per_product" and p != r:
+                    continue
+                if scope == "resource" and prod_period_resource.get((p, t)) != r:
                     continue
                 xv = float(pulp.value(x[(p, t)]) or 0.0)
                 pt = proc_time.get((p, t), 1.0) if has_proc_time else 1.0
@@ -354,6 +385,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
         has_capacity=has_capacity,
         has_proc_time=has_proc_time,
         has_resource=has_resource and bool(resources),
+        use_per_product_cap=use_per_product_cap,
         has_init_inv=has_init_inv,
         has_setup_cost=has_setup_cost,
         has_setup_time=has_setup_time,
@@ -421,6 +453,7 @@ def _build_multi_period_formulation(
     has_capacity: bool,
     has_proc_time: bool,
     has_resource: bool,
+    use_per_product_cap: bool,
     has_init_inv: bool,
     has_setup_cost: bool,
     has_setup_time: bool,
@@ -455,6 +488,8 @@ def _build_multi_period_formulation(
     if has_capacity:
         if has_resource:
             parameters.append({"symbol": r"K_{r,t}", "description": "Available capacity of resource r in period t"})
+        elif use_per_product_cap:
+            parameters.append({"symbol": r"K_{i,t}", "description": "Available production capacity for product i in period t"})
         else:
             parameters.append({"symbol": r"K_t", "description": "Available aggregate production capacity in period t"})
     if has_proc_time:
@@ -507,6 +542,14 @@ def _build_multi_period_formulation(
                     "name": "Resource Capacity",
                     "latex": rf"\sum_{{i \in \mathcal{{P}}_{{r,t}}}} ({proc_sym}{setup_term}) \le K_{{r,t}} \quad \forall r \in \mathcal{{R}},\; t \in \mathcal{{T}}",
                     "explanation": "Total resource consumption (processing plus setup time if mapped) cannot exceed available resource capacity.",
+                }
+            )
+        elif use_per_product_cap:
+            constraints.append(
+                {
+                    "name": "Per-Product Production Capacity",
+                    "latex": rf"{proc_sym}{setup_term} \le K_{{i,t}} \quad \forall i \in \mathcal{{P}},\; t \in \mathcal{{T}}",
+                    "explanation": "Production load for each product i in period t cannot exceed its mapped product-period capacity.",
                 }
             )
         else:

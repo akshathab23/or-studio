@@ -183,6 +183,63 @@ def test_multi_period_repeated_product_period_aggregation():
     assert "Aggregated 1 repeated (Product, Period)" in sol.message
 
 
+def test_multi_period_30_row_per_product_capacity_regression():
+    # 5 products x 6 periods = 30 rows with per-product Capacity_Units (varies across products)
+    rows = [
+        "Product,Period,Demand_Units,Capacity_Units,Unit_Profit,Production_Cost,Holding_Cost,Target_Units"
+    ]
+    total_dem = 0
+    for p_idx in range(1, 6):
+        for t in range(1, 7):
+            dem = 95 + p_idx * 2 + t
+            cap = dem + 25
+            total_dem += dem
+            rows.append(f"P{p_idx},{t},{dem},{cap},50,20,2,{dem}")
+    ds = upload_dataset("prod_30.csv", "\n".join(rows).encode("utf-8"))
+
+    # Auto-detect should recognize per-product capacity and solve to Optimal
+    sol_auto = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="Product",
+                period="Period",
+                demand="Demand_Units",
+                production_cost="Production_Cost",
+                inventory_cost="Holding_Cost",
+                capacity="Capacity_Units",
+            ),
+        )
+    )
+    assert sol_auto.is_optimal is True
+    assert sol_auto.status == "Optimal"
+    assert sol_auto.constraints_feasible is True
+    assert abs((sol_auto.total_demand or 0) - total_dem) < 1e-6
+    assert len(sol_auto.production_schedule) == 30
+    assert len(sol_auto.period_summary) == 6
+    assert sol_auto.cost_breakdown is not None
+    assert "production_cost" in sol_auto.cost_breakdown
+    assert len(sol_auto.resource_utilization) == 30
+
+    # Explicit aggregate_period on the same dataset should still be Infeasible
+    sol_agg = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="Product",
+                period="Period",
+                demand="Demand_Units",
+                production_cost="Production_Cost",
+                inventory_cost="Holding_Cost",
+                capacity="Capacity_Units",
+            ),
+            capacity_scope="aggregate_period",
+        )
+    )
+    assert sol_agg.is_optimal is False
+    assert sol_agg.status == "Infeasible"
+
+
 def test_goal_programming_weighted_and_preemptive():
     base = dict(
         variables=[

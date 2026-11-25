@@ -65,6 +65,7 @@ class MultiPeriodSolveRequest(BaseModel):
     mapping: MultiPeriodColumnMapping
     integer_production: bool = False
     allow_backlogging: bool = False
+    capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "auto"
 
 
 class MathFormulationSection(BaseModel):

@@ -484,7 +484,7 @@ export const MultiPeriodPage: React.FC = () => {
                               layout={{
                                 title: { text: 'Production by Product and Period' },
                                 barmode: 'group',
-                                xaxis: { title: 'Period' },
+                                xaxis: { title: 'Period', type: 'category' },
                                 yaxis: { title: 'Production Units' },
                               }}
                             />
@@ -512,7 +512,7 @@ export const MultiPeriodPage: React.FC = () => {
                             layout={{
                               title: { text: 'Demand vs. Production by Period' },
                               barmode: 'group',
-                              xaxis: { title: 'Period' },
+                              xaxis: { title: 'Period', type: 'category' },
                               yaxis: { title: 'Units' },
                             }}
                           />
@@ -533,7 +533,7 @@ export const MultiPeriodPage: React.FC = () => {
                             ]}
                             layout={{
                               title: { text: 'Ending Inventory Over Periods' },
-                              xaxis: { title: 'Period' },
+                              xaxis: { title: 'Period', type: 'category' },
                               yaxis: { title: 'Inventory Units' },
                             }}
                           />
