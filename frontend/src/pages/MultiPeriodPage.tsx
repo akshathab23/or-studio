@@ -72,6 +72,26 @@ export const MultiPeriodPage: React.FC = () => {
     [dataset]
   );
 
+  const productProductionTraces = useMemo(() => {
+    if (!mpSolution?.is_optimal || mpSolution.production_schedule.length === 0) return [];
+    const palette = ['#2563eb', '#0f172a', '#0ea5e9', '#10b981', '#f59e0b', '#6366f1'];
+    const periods = mpSolution.period_summary.map((p) => p.period);
+    const products = Array.from(
+      new Set(mpSolution.production_schedule.map((r) => String(r.product)))
+    );
+    const lookup = new Map<string, number>();
+    mpSolution.production_schedule.forEach((r) => {
+      lookup.set(`${String(r.product)}__${String(r.period)}`, Number(r.production ?? 0));
+    });
+    return products.slice(0, 12).map((prod, idx) => ({
+      x: periods,
+      y: periods.map((per) => lookup.get(`${prod}__${per}`) ?? 0),
+      name: prod,
+      type: 'bar',
+      marker: { color: palette[idx % palette.length] },
+    }));
+  }, [mpSolution]);
+
   const cleanMapping = (): MultiPeriodColumnMapping => ({
     product: mapping.product,
     period: mapping.period,
@@ -451,6 +471,120 @@ export const MultiPeriodPage: React.FC = () => {
 
                   {mpSolution.is_optimal && (
                     <>
+                      <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3 text-xs text-slate-700">
+                        {mpSolution.message}
+                      </div>
+
+                      {/* Result Visualizations (Always visible on Results view) */}
+                      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                        {productProductionTraces.length > 0 && (
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                            <PlotlyChart
+                              data={productProductionTraces}
+                              layout={{
+                                title: { text: 'Production by Product and Period' },
+                                barmode: 'group',
+                                xaxis: { title: 'Period' },
+                                yaxis: { title: 'Production Units' },
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                          <PlotlyChart
+                            data={[
+                              {
+                                x: mpSolution.period_summary.map((p) => p.period),
+                                y: mpSolution.period_summary.map((p) => p.total_demand),
+                                name: 'Total Demand',
+                                type: 'bar',
+                                marker: { color: '#94a3b8' },
+                              },
+                              {
+                                x: mpSolution.period_summary.map((p) => p.period),
+                                y: mpSolution.period_summary.map((p) => p.total_production),
+                                name: 'Total Production',
+                                type: 'bar',
+                                marker: { color: '#2563eb' },
+                              },
+                            ]}
+                            layout={{
+                              title: { text: 'Demand vs. Production by Period' },
+                              barmode: 'group',
+                              xaxis: { title: 'Period' },
+                              yaxis: { title: 'Units' },
+                            }}
+                          />
+                        </div>
+
+                        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                          <PlotlyChart
+                            data={[
+                              {
+                                x: mpSolution.period_summary.map((p) => p.period),
+                                y: mpSolution.period_summary.map((p) => p.total_ending_inventory),
+                                name: 'Ending Inventory',
+                                type: 'scatter',
+                                mode: 'lines+markers',
+                                line: { color: '#0f172a', width: 2.5 },
+                                marker: { size: 7, color: '#2563eb' },
+                              },
+                            ]}
+                            layout={{
+                              title: { text: 'Ending Inventory Over Periods' },
+                              xaxis: { title: 'Period' },
+                              yaxis: { title: 'Inventory Units' },
+                            }}
+                          />
+                        </div>
+
+                        {mpSolution.cost_breakdown &&
+                          Object.keys(mpSolution.cost_breakdown).length > 0 && (
+                            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                              <PlotlyChart
+                                data={[
+                                  {
+                                    x: Object.keys(mpSolution.cost_breakdown).map((k) =>
+                                      k.replace(/_/g, ' ').toUpperCase()
+                                    ),
+                                    y: Object.values(mpSolution.cost_breakdown),
+                                    type: 'bar',
+                                    marker: { color: ['#2563eb', '#0f172a', '#64748b'] },
+                                  },
+                                ]}
+                                layout={{
+                                  title: { text: 'Cost Summary Breakdown' },
+                                  xaxis: { title: 'Cost Component' },
+                                  yaxis: { title: 'Total Cost' },
+                                }}
+                              />
+                            </div>
+                          )}
+
+                        {mpSolution.resource_utilization.length > 0 && (
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs lg:col-span-2">
+                            <PlotlyChart
+                              data={[
+                                {
+                                  x: mpSolution.resource_utilization.map(
+                                    (u) => `${u.resource} (T${u.period})`
+                                  ),
+                                  y: mpSolution.resource_utilization.map((u) => u.utilization_pct),
+                                  name: 'Utilization %',
+                                  type: 'bar',
+                                  marker: { color: '#2563eb' },
+                                },
+                              ]}
+                              layout={{
+                                title: { text: 'Capacity & Resource Utilization (%)' },
+                                xaxis: { title: 'Resource / Period' },
+                                yaxis: { title: 'Utilization (%)', range: [0, 110] },
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
                       {/* Production & Inventory Schedule Table */}
                       <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden">
                         <div className="border-b border-slate-200 px-5 py-3.5">
@@ -544,6 +678,21 @@ export const MultiPeriodPage: React.FC = () => {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                      {/* Production by Product and Period */}
+                      {productProductionTraces.length > 0 && (
+                        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                          <PlotlyChart
+                            data={productProductionTraces}
+                            layout={{
+                              title: { text: 'Production by Product and Period' },
+                              barmode: 'group',
+                              xaxis: { title: 'Period' },
+                              yaxis: { title: 'Production Units' },
+                            }}
+                          />
+                        </div>
+                      )}
+
                       {/* Demand vs Production */}
                       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
                         <PlotlyChart

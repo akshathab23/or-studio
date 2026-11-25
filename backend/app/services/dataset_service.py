@@ -342,6 +342,7 @@ def validate_multi_period_mapping(
     # 3. Check duplicate (product, period) if no resource or check consistency
     products = 0
     periods = 0
+    repeated_pairs = 0
     if mapping.product in df.columns and mapping.period in df.columns:
         products = int(df[mapping.product].nunique(dropna=True))
         periods = int(df[mapping.period].nunique(dropna=True))
@@ -354,6 +355,26 @@ def validate_multi_period_mapping(
                     message="Product or Period column has 0 unique values.",
                 )
             )
+        else:
+            dup_mask = df.duplicated(subset=[mapping.product, mapping.period], keep=False)
+            if dup_mask.any():
+                repeated_pairs = int(
+                    df.loc[dup_mask, [mapping.product, mapping.period]]
+                    .drop_duplicates()
+                    .shape[0]
+                )
+                issues.append(
+                    MappingValidationIssue(
+                        field="product",
+                        column=mapping.product,
+                        severity="warning",
+                        message=(
+                            f"Detected {repeated_pairs} repeated (Product, Period) combination(s) "
+                            f"across {int(dup_mask.sum())} rows. Demand will be summed per "
+                            "(Product, Period) and unit costs/times averaged."
+                        ),
+                    )
+                )
 
     # 4. Model compatibility warnings
     if not mapping.production_cost and not mapping.inventory_cost and not mapping.setup_cost:

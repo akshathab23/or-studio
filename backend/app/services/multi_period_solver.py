@@ -47,38 +47,40 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
     has_setup_time = bool(m.setup_time)
     has_setup = has_setup_cost or has_setup_time
 
-    # Build parameter dictionaries from actual rows
+    # Build parameter dictionaries from actual rows (track counts for clean aggregation)
     demand: dict[tuple[str, str], float] = {(p, t): 0.0 for p in products for t in periods}
-    prod_cost: dict[tuple[str, str], float] = {}
-    inv_cost: dict[tuple[str, str], float] = {}
-    proc_time: dict[tuple[str, str], float] = {}
-    setup_cost: dict[tuple[str, str], float] = {}
-    setup_time: dict[tuple[str, str], float] = {}
+    pair_row_counts: dict[tuple[str, str], int] = {}
+    prod_cost_acc: dict[tuple[str, str], list[float]] = {}
+    inv_cost_acc: dict[tuple[str, str], list[float]] = {}
+    proc_time_acc: dict[tuple[str, str], list[float]] = {}
+    setup_cost_acc: dict[tuple[str, str], list[float]] = {}
+    setup_time_acc: dict[tuple[str, str], list[float]] = {}
     init_inv: dict[str, float] = {p: 0.0 for p in products}
     init_inv_seen: set[str] = set()
 
     # Capacity structures
-    cap_period: dict[str, float] = {}
-    cap_resource_period: dict[tuple[str, str], float] = {}
+    cap_period_acc: dict[str, list[float]] = {}
+    cap_resource_period_acc: dict[tuple[str, str], list[float]] = {}
     prod_period_resource: dict[tuple[str, str], str] = {}
     resources: list[str] = []
 
     for _, row in df.iterrows():
         p = str(row[m.product])
         t = str(row[m.period])
+        pair_row_counts[(p, t)] = pair_row_counts.get((p, t), 0) + 1
         d_val = float(pd.to_numeric(row[m.demand]))
         demand[(p, t)] = demand.get((p, t), 0.0) + d_val
 
         if has_prod_cost and m.production_cost:
-            prod_cost[(p, t)] = float(pd.to_numeric(row[m.production_cost]))
+            prod_cost_acc.setdefault((p, t), []).append(float(pd.to_numeric(row[m.production_cost])))
         if has_inv_cost and m.inventory_cost:
-            inv_cost[(p, t)] = float(pd.to_numeric(row[m.inventory_cost]))
+            inv_cost_acc.setdefault((p, t), []).append(float(pd.to_numeric(row[m.inventory_cost])))
         if has_proc_time and m.processing_time:
-            proc_time[(p, t)] = float(pd.to_numeric(row[m.processing_time]))
+            proc_time_acc.setdefault((p, t), []).append(float(pd.to_numeric(row[m.processing_time])))
         if has_setup_cost and m.setup_cost:
-            setup_cost[(p, t)] = float(pd.to_numeric(row[m.setup_cost]))
+            setup_cost_acc.setdefault((p, t), []).append(float(pd.to_numeric(row[m.setup_cost])))
         if has_setup_time and m.setup_time:
-            setup_time[(p, t)] = float(pd.to_numeric(row[m.setup_time]))
+            setup_time_acc.setdefault((p, t), []).append(float(pd.to_numeric(row[m.setup_time])))
         if has_init_inv and m.initial_inventory and p not in init_inv_seen:
             init_inv[p] = float(pd.to_numeric(row[m.initial_inventory]))
             init_inv_seen.add(p)
@@ -90,9 +92,18 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 if r not in resources:
                     resources.append(r)
                 prod_period_resource[(p, t)] = r
-                cap_resource_period[(r, t)] = c_val
+                cap_resource_period_acc.setdefault((r, t), []).append(c_val)
             else:
-                cap_period[t] = c_val
+                cap_period_acc.setdefault(t, []).append(c_val)
+
+    prod_cost = {k: sum(v) / len(v) for k, v in prod_cost_acc.items()}
+    inv_cost = {k: sum(v) / len(v) for k, v in inv_cost_acc.items()}
+    proc_time = {k: sum(v) / len(v) for k, v in proc_time_acc.items()}
+    setup_cost = {k: sum(v) / len(v) for k, v in setup_cost_acc.items()}
+    setup_time = {k: sum(v) / len(v) for k, v in setup_time_acc.items()}
+    cap_period = {k: sum(v) / len(v) for k, v in cap_period_acc.items()}
+    cap_resource_period = {k: sum(v) / len(v) for k, v in cap_resource_period_acc.items()}
+    repeated_pairs = sum(1 for cnt in pair_row_counts.values() if cnt > 1)
 
     # Construct PuLP model
     prob = pulp.LpProblem("OR_Studio_Multi_Period_Production_Planning", pulp.LpMinimize)
@@ -357,17 +368,24 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
         uses_cost_objective=uses_cost_objective,
     )
 
+    agg_note = (
+        f" Aggregated {repeated_pairs} repeated (Product, Period) pair(s) by summing demand "
+        "and averaging unit parameters."
+        if repeated_pairs > 0
+        else ""
+    )
+
     if is_optimal:
-        msg = f"Optimal solution found in {solve_time}s with objective value {obj_value}."
+        msg = f"Optimal solution found in {solve_time}s with objective value {obj_value}.{agg_note}"
     elif status_str == "Infeasible":
         msg = (
             "The model is INFEASIBLE. No production plan satisfies all demand and capacity "
-            "constraints simultaneously."
+            f"constraints simultaneously.{agg_note}"
         )
     elif status_str == "Unbounded":
-        msg = "The model is UNBOUNDED. Check cost signs and constraints."
+        msg = f"The model is UNBOUNDED. Check cost signs and constraints.{agg_note}"
     else:
-        msg = f"Solver terminated with non-optimal status: {status_str}."
+        msg = f"Solver terminated with non-optimal status: {status_str}.{agg_note}"
 
     return MultiPeriodSolveResponse(
         solver_name="PuLP CBC (COIN-OR Branch and Cut)",

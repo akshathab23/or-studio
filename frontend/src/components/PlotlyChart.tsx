@@ -20,13 +20,16 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
     const el = containerRef.current;
     if (!el) return;
 
+    const plotlyApi =
+      (Plotly as unknown as { default?: typeof Plotly }).default ?? Plotly;
+
     const mergedLayout: Record<string, unknown> = {
       font: { family: 'Inter, sans-serif', color: '#1e293b', size: 12 },
       paper_bgcolor: '#ffffff',
       plot_bgcolor: '#ffffff',
-      margin: { t: 44, r: 24, b: 48, l: 56 },
+      margin: { t: 48, r: 24, b: 56, l: 60 },
       hovermode: 'closest',
-      legend: { orientation: 'h', y: -0.22 },
+      legend: { orientation: 'h', y: -0.24 },
       ...layout,
       height,
     };
@@ -37,20 +40,34 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
     };
 
-    void Plotly.react(el, data, mergedLayout, config);
+    void plotlyApi.react(el, data, mergedLayout, config);
 
     const observer = new ResizeObserver(() => {
       if (el) {
-        Plotly.Plots.resize(el);
+        try {
+          plotlyApi.Plots.resize(el);
+        } catch {
+          // ignore resize errors during unmount
+        }
       }
     });
     observer.observe(el);
 
     return () => {
       observer.disconnect();
-      Plotly.purge(el);
+      try {
+        plotlyApi.purge(el);
+      } catch {
+        // ignore cleanup errors
+      }
     };
   }, [data, layout, height]);
 
-  return <div ref={containerRef} className={`w-full ${className}`} />;
+  return (
+    <div
+      ref={containerRef}
+      style={{ minHeight: height }}
+      className={`w-full ${className}`}
+    />
+  );
 };

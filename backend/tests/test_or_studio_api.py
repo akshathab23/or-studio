@@ -139,6 +139,50 @@ def test_multi_period_solver_optimal_and_infeasible():
     assert sol2.status == "Infeasible"
 
 
+def test_multi_period_repeated_product_period_aggregation():
+    # Two rows for (P1, 1) with demands 30 and 20 (sum=50) and costs 10 and 20 (mean=15)
+    csv_dup = (
+        "product,period,demand,prod_cost,inv_cost,capacity\n"
+        "P1,1,30,10,2,100\n"
+        "P1,1,20,20,2,100\n"
+    )
+    ds = upload_dataset("dup.csv", csv_dup.encode("utf-8"))
+    val = api_validate_mapping(
+        ds.dataset_id,
+        MultiPeriodColumnMapping(
+            product="product",
+            period="period",
+            demand="demand",
+            production_cost="prod_cost",
+            inventory_cost="inv_cost",
+            capacity="capacity",
+        ),
+    )
+    assert val.valid is True
+    assert any(
+        i.severity == "warning" and "repeated (Product, Period)" in i.message
+        for i in val.issues
+    )
+
+    sol = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="product",
+                period="period",
+                demand="demand",
+                production_cost="prod_cost",
+                inventory_cost="inv_cost",
+                capacity="capacity",
+            ),
+        )
+    )
+    assert sol.is_optimal is True
+    assert abs((sol.total_demand or 0) - 50.0) < 1e-6
+    assert abs((sol.objective_value or 0) - 750.0) < 1e-4  # 50 * mean(10, 20) = 750
+    assert "Aggregated 1 repeated (Product, Period)" in sol.message
+
+
 def test_goal_programming_weighted_and_preemptive():
     base = dict(
         variables=[
