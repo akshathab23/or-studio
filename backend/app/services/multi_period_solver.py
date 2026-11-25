@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -15,11 +16,33 @@ from app.services.dataset_service import get_dataset, validate_multi_period_mapp
 
 
 def _sort_periods(values: list[Any]) -> list[str]:
-    unique = list(dict.fromkeys(str(v) for v in values))
-    try:
-        return [str(x) for x in sorted(unique, key=lambda v: float(v))]
-    except ValueError:
+    unique = list(dict.fromkeys(str(v).strip() for v in values))
+    if len(unique) <= 1:
         return unique
+
+    # 1. Pure numeric periods (e.g., 1, 2, 10)
+    try:
+        return [x for x in sorted(unique, key=lambda v: float(v))]
+    except ValueError:
+        pass
+
+    # 2. ISO dates, YYYY-MM, or date strings
+    try:
+        parsed_dates = pd.to_datetime(unique, format="mixed", errors="raise")
+        paired = sorted(zip(parsed_dates, unique), key=lambda pair: pair[0])
+        return [u for _, u in paired]
+    except Exception:
+        pass
+
+    # 3. Natural alphanumeric periods (e.g., Month 1..10, P1..P12, 2025-W01, 2025-Q1)
+    if all(re.search(r"\d", u) for u in unique):
+        def _nat_key(s: str) -> list[tuple[int, Any]]:
+            parts = re.split(r"(\d+)", s)
+            return [(0, int(p)) if p.isdigit() else (1, p.lower()) for p in parts if p]
+
+        return sorted(unique, key=_nat_key)
+
+    return unique
 
 
 def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse:
@@ -283,6 +306,9 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
             p_sum = 0.0
             d_sum = 0.0
             i_sum = 0.0
+            p_prod_cost = 0.0
+            p_inv_cost = 0.0
+            p_setup_cost = 0.0
             for p in products:
                 xv = round(float(pulp.value(x[(p, t)]) or 0.0), 6)
                 iv = round(float(pulp.value(I_var[(p, t)]) or 0.0), 6)
@@ -301,6 +327,9 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 total_prod_cost_val += pc
                 total_inv_cost_val += ic
                 total_setup_cost_val += sc
+                p_prod_cost += pc
+                p_inv_cost += ic
+                p_setup_cost += sc
 
                 row_item: dict[str, Any] = {
                     "product": p,
@@ -326,14 +355,18 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
 
             total_p_val += p_sum
             total_i_val += i_sum
-            period_summary.append(
-                {
-                    "period": t,
-                    "total_production": round(p_sum, 6),
-                    "total_demand": round(d_sum, 6),
-                    "total_ending_inventory": round(i_sum, 6),
-                }
-            )
+            period_entry: dict[str, Any] = {
+                "period": t,
+                "total_production": round(p_sum, 6),
+                "total_demand": round(d_sum, 6),
+                "total_ending_inventory": round(i_sum, 6),
+            }
+            if uses_cost_objective:
+                period_entry["production_cost"] = round(p_prod_cost, 4)
+                period_entry["inventory_cost"] = round(p_inv_cost, 4)
+                period_entry["setup_cost"] = round(p_setup_cost, 4)
+                period_entry["total_cost"] = round(p_prod_cost + p_inv_cost + p_setup_cost, 4)
+            period_summary.append(period_entry)
 
         total_prod = round(total_p_val, 6)
         total_end_inv = round(total_i_val, 6)

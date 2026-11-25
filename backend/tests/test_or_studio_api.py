@@ -240,6 +240,85 @@ def test_multi_period_30_row_per_product_capacity_regression():
     assert sol_agg.status == "Infeasible"
 
 
+def test_multi_period_10_row_36_period_and_15_product_completeness():
+    # 1. 10-row dataset (2 products x 5 periods, aggregate capacity 100 >= 40+40)
+    rows_10 = ["product,period,demand,prod_cost,inv_cost,capacity"]
+    for p in ["A", "B"]:
+        for t in range(1, 6):
+            rows_10.append(f"{p},{t},40,10,2,100")
+    ds10 = upload_dataset("ten_rows.csv", "\n".join(rows_10).encode("utf-8"))
+    sol10 = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds10.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="product",
+                period="period",
+                demand="demand",
+                production_cost="prod_cost",
+                inventory_cost="inv_cost",
+                capacity="capacity",
+            ),
+        )
+    )
+    assert sol10.is_optimal is True
+    assert len(sol10.period_summary) == 5
+    assert len(sol10.production_schedule) == 10
+
+    # 2. 36-period dataset with unsorted YYYY-MM labels
+    rows_36 = ["product,period,demand,prod_cost,inv_cost,capacity"]
+    months = [f"{2023 + (m // 12)}-{(m % 12) + 1:02d}" for m in range(36)]
+    for m in reversed(months):  # intentionally reverse order to test chronological sort
+        rows_36.append(f"SKU1,{m},25,8,1,40")
+    ds36 = upload_dataset("periods_36.csv", "\n".join(rows_36).encode("utf-8"))
+    sol36 = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds36.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="product",
+                period="period",
+                demand="demand",
+                production_cost="prod_cost",
+                inventory_cost="inv_cost",
+                capacity="capacity",
+            ),
+        )
+    )
+    assert sol36.is_optimal is True
+    assert [p["period"] for p in sol36.period_summary] == months
+    sum_period_cost = sum(p["total_cost"] for p in sol36.period_summary)
+    assert sol36.objective_value is not None
+    assert abs(sum_period_cost - sol36.objective_value) < 1e-3
+
+    # 3. 15 products (>12 products) across 4 natural alphanumeric periods
+    rows_15 = ["product,period,demand,prod_cost,inv_cost,capacity"]
+    for p_idx in range(1, 16):
+        for per in ["Month 10", "Month 2", "Month 1", "Month 3"]:
+            rows_15.append(f"Item_{p_idx:02d},{per},{10 + p_idx},5,1,{30 + p_idx}")
+    ds15 = upload_dataset("products_15.csv", "\n".join(rows_15).encode("utf-8"))
+    sol15 = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds15.dataset_id,
+            mapping=MultiPeriodColumnMapping(
+                product="product",
+                period="period",
+                demand="demand",
+                production_cost="prod_cost",
+                inventory_cost="inv_cost",
+                capacity="capacity",
+            ),
+        )
+    )
+    assert sol15.is_optimal is True
+    assert [p["period"] for p in sol15.period_summary] == [
+        "Month 1",
+        "Month 2",
+        "Month 3",
+        "Month 10",
+    ]
+    unique_prods = {r["product"] for r in sol15.production_schedule}
+    assert len(unique_prods) == 15
+
+
 def test_goal_programming_weighted_and_preemptive():
     base = dict(
         variables=[
