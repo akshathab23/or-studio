@@ -63,6 +63,11 @@ export const MultiPeriodPage: React.FC = () => {
   const [solving, setSolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'results' | 'graphs' | 'formulation'>('results');
+  const [selectedFlowProduct, setSelectedFlowProduct] = useState<string>('__ALL__');
+
+  useEffect(() => {
+    setSelectedFlowProduct('__ALL__');
+  }, [mpSolution]);
 
   useEffect(() => {
     setValidation(null);
@@ -140,12 +145,23 @@ export const MultiPeriodPage: React.FC = () => {
     return m;
   }, [dataset]);
 
-  const { productProductionTraces, productInventoryTraces, periodCostTraces } = useMemo(() => {
+  const {
+    productProductionTraces,
+    periodCostTraces,
+    flowProducts,
+    inventoryFlowSeries,
+  } = useMemo(() => {
     if (!mpSolution?.is_optimal || mpSolution.production_schedule.length === 0) {
       return {
         productProductionTraces: [],
-        productInventoryTraces: [],
         periodCostTraces: [],
+        flowProducts: [] as string[],
+        inventoryFlowSeries: null as {
+          periods: string[];
+          production: number[];
+          demand: number[];
+          endingInventory: number[];
+        } | null,
       };
     }
 
@@ -160,6 +176,7 @@ export const MultiPeriodPage: React.FC = () => {
     );
 
     const prodLookup = new Map<string, number>();
+    const demLookup = new Map<string, number>();
     const invLookup = new Map<string, number>();
     const prodCostByPeriod = new Map<string, number>();
     const invCostByPeriod = new Map<string, number>();
@@ -168,11 +185,20 @@ export const MultiPeriodPage: React.FC = () => {
     let hasProdCostCol = false;
     let hasInvCostCol = false;
     let hasSetupCostCol = false;
+    let hasRequiredFlowFields = true;
 
     mpSolution.production_schedule.forEach((r) => {
       const key = `${String(r.product)}__${String(r.period)}`;
       const per = String(r.period);
+      if (
+        r.production === undefined ||
+        r.demand === undefined ||
+        r.ending_inventory === undefined
+      ) {
+        hasRequiredFlowFields = false;
+      }
       prodLookup.set(key, Number(r.production ?? 0));
+      demLookup.set(key, Number(r.demand ?? 0));
       invLookup.set(key, Number(r.ending_inventory ?? 0));
 
       if (r.production_cost !== undefined && r.production_cost !== null) {
@@ -197,15 +223,34 @@ export const MultiPeriodPage: React.FC = () => {
       marker: { color: palette[idx % palette.length] },
     }));
 
-    const invTraces = products.map((prod, idx) => ({
-      x: periods,
-      y: periods.map((per) => invLookup.get(`${prod}__${per}`) ?? 0),
-      name: prod,
-      type: 'scatter',
-      mode: 'lines+markers',
-      line: { color: palette[idx % palette.length], width: 2 },
-      marker: { size: 5, color: palette[idx % palette.length] },
-    }));
+    let flowSeries: {
+      periods: string[];
+      production: number[];
+      demand: number[];
+      endingInventory: number[];
+    } | null = null;
+
+    if (hasRequiredFlowFields && periods.length > 0) {
+      if (selectedFlowProduct === '__ALL__' || !products.includes(selectedFlowProduct)) {
+        flowSeries = {
+          periods,
+          production: mpSolution.period_summary.map((p) => Number(p.total_production ?? 0)),
+          demand: mpSolution.period_summary.map((p) => Number(p.total_demand ?? 0)),
+          endingInventory: mpSolution.period_summary.map((p) =>
+            Number(p.total_ending_inventory ?? 0)
+          ),
+        };
+      } else {
+        flowSeries = {
+          periods,
+          production: periods.map((per) => prodLookup.get(`${selectedFlowProduct}__${per}`) ?? 0),
+          demand: periods.map((per) => demLookup.get(`${selectedFlowProduct}__${per}`) ?? 0),
+          endingInventory: periods.map(
+            (per) => invLookup.get(`${selectedFlowProduct}__${per}`) ?? 0
+          ),
+        };
+      }
+    }
 
     const costTraces: Record<string, unknown>[] = [];
     if (hasProdCostCol) {
@@ -241,29 +286,16 @@ export const MultiPeriodPage: React.FC = () => {
 
     return {
       productProductionTraces: prodTraces,
-      productInventoryTraces: invTraces,
       periodCostTraces: costTraces,
+      flowProducts: products,
+      inventoryFlowSeries: flowSeries,
     };
-  }, [mpSolution]);
+  }, [mpSolution, selectedFlowProduct]);
 
   const periodTickAngle =
     (mpSolution?.period_summary.length ?? 0) > 6 ? -40 : 0;
   const periodNTicks =
     (mpSolution?.period_summary.length ?? 0) > 14 ? 12 : undefined;
-
-  const formatCostLabel = (key: string): string => {
-    const map: Record<string, string> = {
-      production_cost: 'Production Cost',
-      inventory_cost: 'Inventory Cost',
-      setup_cost: 'Setup Cost',
-    };
-    return (
-      map[key] ??
-      key
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, (c) => c.toUpperCase())
-    );
-  };
 
   const productCountLabel = (n: number) => (n === 1 ? '1 product' : `${n} products`);
 
@@ -282,10 +314,6 @@ export const MultiPeriodPage: React.FC = () => {
         ? { orientation: 'v', x: 1.02, y: 1, font: { size: 11 } }
         : topHorizontalLegend;
     const zeroTotalInventory = (mpSolution.total_ending_inventory ?? 0) <= 1e-6;
-
-    const costEntries = mpSolution.cost_breakdown
-      ? Object.entries(mpSolution.cost_breakdown)
-      : [];
 
     return (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -363,78 +391,98 @@ export const MultiPeriodPage: React.FC = () => {
           />
         </div>
 
-        {productInventoryTraces.length > 0 && (
-          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-            <h4 className="mb-2 text-sm font-semibold text-slate-900">
-              Ending Inventory by Product and Period ({productCountLabel(productInventoryTraces.length)})
+        <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs lg:col-span-2">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-semibold text-slate-900">
+              Inventory Flow &amp; Demand Analysis
             </h4>
-            <PlotlyChart
-              height={productInventoryTraces.length > 10 ? 400 : 330}
-              data={productInventoryTraces}
-              layout={{
-                hovermode: 'x unified',
-                legend: multiProductLegend,
-                margin: {
-                  t: productInventoryTraces.length > 6 ? 16 : 48,
-                  r: productInventoryTraces.length > 6 ? 105 : 16,
-                  b: periodTickAngle ? 72 : 48,
-                  l: 56,
-                },
-                xaxis: {
-                  title: 'Period',
-                  type: 'category',
-                  tickmode: 'auto',
-                  nticks: periodNTicks,
-                  tickangle: periodTickAngle,
-                  automargin: true,
-                },
-                yaxis: { title: 'Inventory Units', automargin: true },
-              }}
-            />
-            {zeroTotalInventory && (
-              <p className="mt-2 text-xs text-slate-500">
-                Just-in-time optimal plan: available capacity meets demand in every period with zero ending inventory held.
-              </p>
+            {flowProducts.length > 1 && (
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor="inventory-flow-product"
+                  className="text-xs font-medium text-slate-600"
+                >
+                  Scope:
+                </label>
+                <select
+                  id="inventory-flow-product"
+                  value={selectedFlowProduct}
+                  onChange={(e) => setSelectedFlowProduct(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="__ALL__">
+                    All Products (Aggregated — {flowProducts.length} products)
+                  </option>
+                  {flowProducts.map((prod) => (
+                    <option key={prod} value={prod}>
+                      {prod}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
           </div>
-        )}
 
-        <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <h4 className="mb-2 text-sm font-semibold text-slate-900">
-            Aggregate Ending Inventory Over Periods
-          </h4>
-          <PlotlyChart
-            height={330}
-            data={[
-              {
-                x: mpSolution.period_summary.map((p) => p.period),
-                y: mpSolution.period_summary.map((p) => p.total_ending_inventory),
-                name: 'Aggregate Ending Inventory',
-                type: 'scatter',
-                mode: 'lines+markers',
-                line: { color: '#0f172a', width: 2.5 },
-                marker: { size: 7, color: '#2563eb' },
-                hovertemplate: 'Ending Inventory: %{y:,.2f}<extra></extra>',
-              },
-            ]}
-            layout={{
-              hovermode: 'x unified',
-              margin: { t: 16, r: 16, b: periodTickAngle ? 72 : 48, l: 56 },
-              xaxis: {
-                title: 'Period',
-                type: 'category',
-                tickmode: 'auto',
-                nticks: periodNTicks,
-                tickangle: periodTickAngle,
-                automargin: true,
-              },
-              yaxis: { title: 'Inventory Units', automargin: true },
-            }}
-          />
-          {zeroTotalInventory && (
-            <p className="mt-2 text-xs text-slate-500">
-              Aggregate ending inventory is 0 across all periods because holding inventory incurs positive cost while capacity is sufficient.
-            </p>
+          {!inventoryFlowSeries ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+              Production, Demand, or Ending Inventory fields are unavailable in the current solver output.
+            </div>
+          ) : (
+            <>
+              <PlotlyChart
+                height={360}
+                data={[
+                  {
+                    x: inventoryFlowSeries.periods,
+                    y: inventoryFlowSeries.production,
+                    name: 'Production',
+                    type: 'bar',
+                    marker: { color: '#2563eb' },
+                    hovertemplate: 'Production: %{y:,.2f}<extra></extra>',
+                  },
+                  {
+                    x: inventoryFlowSeries.periods,
+                    y: inventoryFlowSeries.demand,
+                    name: 'Demand',
+                    type: 'bar',
+                    marker: { color: '#94a3b8' },
+                    hovertemplate: 'Demand: %{y:,.2f}<extra></extra>',
+                  },
+                  {
+                    x: inventoryFlowSeries.periods,
+                    y: inventoryFlowSeries.endingInventory,
+                    name: 'Ending Inventory',
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    line: { color: '#0f172a', width: 2.5 },
+                    marker: { size: 7, color: '#f59e0b' },
+                    hovertemplate: 'Ending Inventory: %{y:,.2f}<extra></extra>',
+                  },
+                ]}
+                layout={{
+                  barmode: 'group',
+                  hovermode: 'x unified',
+                  legend: topHorizontalLegend,
+                  margin: { t: 48, r: 16, b: periodTickAngle ? 72 : 48, l: 56 },
+                  xaxis: {
+                    title: 'Period',
+                    type: 'category',
+                    tickmode: 'auto',
+                    nticks: periodNTicks,
+                    tickangle: periodTickAngle,
+                    automargin: true,
+                  },
+                  yaxis: { title: 'Units', automargin: true },
+                }}
+              />
+              {inventoryFlowSeries.endingInventory.every((v) => v <= 1e-6) && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {zeroTotalInventory
+                    ? 'Just-in-time optimal plan: ending inventory is 0 across all periods because capacity meets demand and holding inventory incurs positive cost.'
+                    : 'Ending inventory is 0 across all periods for the selected product.'}
+                </p>
+              )}
+            </>
           )}
         </div>
 
@@ -460,37 +508,6 @@ export const MultiPeriodPage: React.FC = () => {
                   automargin: true,
                 },
                 yaxis: { title: 'Cost', automargin: true },
-              }}
-            />
-          </div>
-        )}
-
-        {costEntries.length > 0 && (
-          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-            <h4 className="mb-2 text-sm font-semibold text-slate-900">
-              Total Cost Summary Breakdown
-            </h4>
-            <PlotlyChart
-              height={330}
-              data={[
-                {
-                  type: 'bar',
-                  orientation: 'h',
-                  y: costEntries.map(([k]) => formatCostLabel(k)),
-                  x: costEntries.map(([, v]) => v),
-                  text: costEntries.map(([, v]) =>
-                    Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })
-                  ),
-                  textposition: 'outside',
-                  cliponaxis: false,
-                  marker: { color: ['#2563eb', '#0f172a', '#f59e0b'] },
-                  hovertemplate: '%{y}: %{x:,.2f}<extra></extra>',
-                },
-              ]}
-              layout={{
-                margin: { t: 16, r: 72, b: 48, l: 112 },
-                xaxis: { title: 'Total Cost', automargin: true },
-                yaxis: { automargin: true, autorange: 'reversed' },
               }}
             />
           </div>
