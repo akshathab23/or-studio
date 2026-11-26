@@ -42,23 +42,15 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
 
     void plotlyApi.react(el, data, mergedLayout, config).then(() => {
       requestAnimationFrame(() => {
-        if (el) {
-          try {
-            plotlyApi.Plots.resize(el);
-          } catch {
-            // ignore resize errors during unmount
-          }
+        if (el && el.offsetParent !== null) {
+          void Promise.resolve(plotlyApi.Plots.resize(el)).catch(() => {});
         }
       });
     });
 
     const observer = new ResizeObserver(() => {
-      if (el) {
-        try {
-          plotlyApi.Plots.resize(el);
-        } catch {
-          // ignore resize errors during unmount
-        }
+      if (el && el.offsetParent !== null) {
+        void Promise.resolve(plotlyApi.Plots.resize(el)).catch(() => {});
       }
     });
     observer.observe(el);

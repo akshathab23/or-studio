@@ -84,8 +84,50 @@ export const MultiPeriodPage: React.FC = () => {
         setup_cost: mpMapping.setup_cost ?? '',
         setup_time: mpMapping.setup_time ?? '',
       });
+      return;
     }
-  }, [mpMapping]);
+
+    if (!dataset || dataset.columns.length === 0) return;
+
+    const used = new Set<string>();
+    const pickCol = (aliases: string[]): string => {
+      const normalized = dataset.columns.map((c) => ({
+        raw: c.name,
+        norm: c.name.toLowerCase().replace(/[^a-z0-9]/g, ''),
+      }));
+      for (const alias of aliases) {
+        const exact = normalized.find((c) => c.norm === alias && !used.has(c.raw));
+        if (exact) {
+          used.add(exact.raw);
+          return exact.raw;
+        }
+      }
+      for (const alias of aliases) {
+        const partial = normalized.find(
+          (c) => c.norm.includes(alias) && !used.has(c.raw)
+        );
+        if (partial) {
+          used.add(partial.raw);
+          return partial.raw;
+        }
+      }
+      return '';
+    };
+
+    setMapping({
+      product: pickCol(['product', 'productid', 'productname', 'sku', 'stockcode', 'item', 'itemid']),
+      period: pickCol(['period', 'timeperiod', 'month', 'week', 'quarter', 'yearmonth', 'date', 't']),
+      demand: pickCol(['demand', 'demandunits', 'quantity', 'qty', 'sales']),
+      production_cost: pickCol(['productioncost', 'prodcost', 'unitproductioncost', 'unitcost', 'assumedproductioncost']),
+      inventory_cost: pickCol(['inventorycost', 'holdingcost', 'invcost', 'unitholdingcost', 'assumedinventorycost']),
+      capacity: pickCol(['capacity', 'capacityunits', 'estimatedcapacity', 'maxcapacity']),
+      processing_time: pickCol(['processingtime', 'proctime', 'cycletime', 'unittime']),
+      resource: pickCol(['resource', 'machine', 'line', 'workcenter', 'plant']),
+      initial_inventory: pickCol(['initialinventory', 'initinv', 'startinginventory', 'beginninginventory', 'assumedinitialinventory']),
+      setup_cost: pickCol(['setupcost', 'changeovercost', 'fixedcost']),
+      setup_time: pickCol(['setuptime', 'changeovertime']),
+    });
+  }, [mpMapping, dataset]);
 
   const columnNames = useMemo(
     () => dataset?.columns.map((c) => c.name) ?? [],
@@ -206,6 +248,8 @@ export const MultiPeriodPage: React.FC = () => {
 
   const periodTickAngle =
     (mpSolution?.period_summary.length ?? 0) > 6 ? -40 : 0;
+  const periodNTicks =
+    (mpSolution?.period_summary.length ?? 0) > 14 ? 12 : undefined;
 
   const formatCostLabel = (key: string): string => {
     const map: Record<string, string> = {
@@ -266,6 +310,8 @@ export const MultiPeriodPage: React.FC = () => {
                 xaxis: {
                   title: 'Period',
                   type: 'category',
+                  tickmode: 'auto',
+                  nticks: periodNTicks,
                   tickangle: periodTickAngle,
                   automargin: true,
                 },
@@ -307,6 +353,8 @@ export const MultiPeriodPage: React.FC = () => {
               xaxis: {
                 title: 'Period',
                 type: 'category',
+                tickmode: 'auto',
+                nticks: periodNTicks,
                 tickangle: periodTickAngle,
                 automargin: true,
               },
@@ -335,6 +383,8 @@ export const MultiPeriodPage: React.FC = () => {
                 xaxis: {
                   title: 'Period',
                   type: 'category',
+                  tickmode: 'auto',
+                  nticks: periodNTicks,
                   tickangle: periodTickAngle,
                   automargin: true,
                 },
@@ -373,6 +423,8 @@ export const MultiPeriodPage: React.FC = () => {
               xaxis: {
                 title: 'Period',
                 type: 'category',
+                tickmode: 'auto',
+                nticks: periodNTicks,
                 tickangle: periodTickAngle,
                 automargin: true,
               },
@@ -402,6 +454,8 @@ export const MultiPeriodPage: React.FC = () => {
                 xaxis: {
                   title: 'Period',
                   type: 'category',
+                  tickmode: 'auto',
+                  nticks: periodNTicks,
                   tickangle: periodTickAngle,
                   automargin: true,
                 },

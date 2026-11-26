@@ -361,6 +361,24 @@ def test_multi_period_15_products_10_periods_nonzero_inventory():
     assert abs(sum_period_cost - sol.objective_value) < 1e-3
 
 
+def test_single_product_mapping_warning_when_other_multi_product_column_exists():
+    csv_data = (
+        "plant,sku,period,demand\n"
+        "PlantA,SKU1,2025-01,10\n"
+        "PlantA,SKU2,2025-01,20\n"
+    )
+    ds = upload_dataset("warn_1prod.csv", csv_data.encode("utf-8"))
+    val = api_validate_mapping(
+        ds.dataset_id,
+        MultiPeriodColumnMapping(product="plant", period="period", demand="demand"),
+    )
+    assert val.valid is True
+    assert any(
+        i.severity == "warning" and "only 1 unique value" in i.message
+        for i in val.issues
+    )
+
+
 def test_goal_programming_weighted_and_preemptive():
     base = dict(
         variables=[

@@ -373,6 +373,27 @@ def validate_multi_period_mapping(
                 )
             )
         else:
+            if products == 1:
+                other_multi = [
+                    str(c)
+                    for c in df.columns
+                    if str(c) not in {mapping.product, mapping.period}
+                    and not pd.api.types.is_numeric_dtype(df[c])
+                    and int(df[c].nunique(dropna=True)) > 1
+                ]
+                if other_multi:
+                    issues.append(
+                        MappingValidationIssue(
+                            field="product",
+                            column=mapping.product,
+                            severity="warning",
+                            message=(
+                                f"Mapped Product column '{mapping.product}' has only 1 unique value, "
+                                f"while column(s) {', '.join(other_multi[:3])} have multiple values. "
+                                "Verify your Product mapping."
+                            ),
+                        )
+                    )
             dup_mask = df.duplicated(subset=[mapping.product, mapping.period], keep=False)
             if dup_mask.any():
                 repeated_pairs = int(
