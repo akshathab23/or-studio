@@ -14,6 +14,7 @@ import {
   Table2,
 } from 'lucide-react';
 import { solveMultiPeriod, validateMultiPeriodMapping } from '../api/client';
+import { DecisionSummary } from '../components/DecisionSummary';
 import { FormulationView } from '../components/FormulationView';
 import { PlotlyChart } from '../components/PlotlyChart';
 import { useStudio } from '../context/StudioContext';
@@ -38,6 +39,8 @@ export const MultiPeriodPage: React.FC = () => {
     mpMapping,
     setMpMapping,
     mpCapacityScope,
+    mpIntegerProd: integerProd,
+    setMpIntegerProd: setIntegerProd,
     mpSolution,
     setMpSolution,
     addHistoryItem,
@@ -57,13 +60,13 @@ export const MultiPeriodPage: React.FC = () => {
     setup_time: mpMapping?.setup_time ?? '',
   }));
 
-  const [integerProd, setIntegerProd] = useState(false);
   const [validation, setValidation] = useState<MappingValidationResponse | null>(null);
   const [validating, setValidating] = useState(false);
   const [solving, setSolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'results' | 'graphs' | 'formulation'>('results');
   const [selectedFlowProduct, setSelectedFlowProduct] = useState<string>('__ALL__');
+  const [selectedResource, setSelectedResource] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedFlowProduct('__ALL__');
@@ -515,11 +518,29 @@ export const MultiPeriodPage: React.FC = () => {
 
         {mpSolution.resource_utilization.length > 0 && (
           <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-xs lg:col-span-2">
-            <h4 className="mb-2 text-sm font-semibold text-slate-900">
-              Capacity & Resource Utilization (%) — {mpSolution.resource_utilization.length} entries
-            </h4>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-semibold text-slate-900">
+                Capacity & Resource Utilization (%) — {mpSolution.resource_utilization.length} entries
+              </h4>
+              {selectedResource && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedResource(null)}
+                  className="rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  Clear Selection
+                </button>
+              )}
+            </div>
+
             <PlotlyChart
               height={350}
+              onPointClick={(pt) => {
+                if (pt.x !== undefined) {
+                  const key = String(pt.x);
+                  setSelectedResource((prev) => (prev === key ? null : key));
+                }
+              }}
               data={[
                 {
                   x: mpSolution.resource_utilization.map(
@@ -528,7 +549,16 @@ export const MultiPeriodPage: React.FC = () => {
                   y: mpSolution.resource_utilization.map((u) => u.utilization_pct),
                   name: 'Utilization %',
                   type: 'bar',
-                  marker: { color: '#2563eb' },
+                  marker: {
+                    color: mpSolution.resource_utilization.map((u) => {
+                      const key = `${u.resource} (T${u.period})`;
+                      if (selectedResource && selectedResource !== key) return '#cbd5e1';
+                      const pct = u.utilization_pct ?? 0;
+                      if (pct >= 99.9) return '#ef4444';
+                      if (pct >= 90) return '#f59e0b';
+                      return '#2563eb';
+                    }),
+                  },
                   hovertemplate: '%{x}: %{y:.2f}%<extra></extra>',
                 },
               ]}
@@ -550,6 +580,117 @@ export const MultiPeriodPage: React.FC = () => {
                 yaxis: { title: 'Utilization (%)', range: [0, 110], automargin: true },
               }}
             />
+
+            {/* Interactive Bottleneck & Resource Drilldown */}
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Resource Inspector (Click a bar on the chart or select below)
+              </div>
+              <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                {mpSolution.resource_utilization.map((u) => {
+                  const key = `${u.resource} (T${u.period})`;
+                  const isSelected = selectedResource === key;
+                  const pct = u.utilization_pct ?? 0;
+                  const atCapacity = pct >= 99.9;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedResource(isSelected ? null : key)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                        isSelected
+                          ? 'border-blue-600 bg-blue-50 text-blue-800'
+                          : atCapacity
+                          ? 'border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100'
+                          : pct >= 90
+                          ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span className="font-semibold">{key}</span>
+                      <span className="font-mono text-[11px] font-bold">
+                        {pct.toFixed(1)}%
+                      </span>
+                      {atCapacity && (
+                        <span className="rounded bg-rose-600 px-1 py-0.2 text-[9px] text-white font-bold">
+                          AT CAPACITY
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedResource && (() => {
+                const item = mpSolution.resource_utilization.find(
+                  (u) => `${u.resource} (T${u.period})` === selectedResource
+                );
+                if (!item) return null;
+                const pct = item.utilization_pct ?? 0;
+                const atCapacity = pct >= 99.9;
+                const nearCapacity = pct >= 90 && !atCapacity;
+                const capacityVal = Number(item.capacity ?? 0);
+                const usedVal = Number(item.used ?? 0);
+                const remainingVal = Math.max(0, Number((capacityVal - usedVal).toFixed(4)));
+                return (
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 font-semibold text-slate-900">
+                      <span>
+                        Resource Detail: {item.resource} (Period {item.period})
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          atCapacity
+                            ? 'bg-rose-100 text-rose-800'
+                            : nearCapacity
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                      >
+                        {atCapacity
+                          ? 'At Capacity'
+                          : nearCapacity
+                          ? 'Near Capacity'
+                          : 'Available Capacity'}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-slate-600 sm:grid-cols-4">
+                      <div>
+                        Capacity:{' '}
+                        <span className="font-mono font-bold text-slate-900">
+                          {capacityVal.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        </span>
+                      </div>
+                      <div>
+                        Used Capacity:{' '}
+                        <span className="font-mono font-bold text-slate-900">
+                          {usedVal.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        </span>
+                      </div>
+                      <div>
+                        Remaining Capacity:{' '}
+                        <span className="font-mono font-bold text-slate-900">
+                          {remainingVal.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        </span>
+                      </div>
+                      <div>
+                        Utilization:{' '}
+                        <span className="font-mono font-bold text-slate-900">
+                          {pct.toFixed(2)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[11px] text-slate-500">
+                      {atCapacity
+                        ? 'This resource is at ≥99.9% of its available capacity in this period. Note: exact dual/shadow prices are not reported by this solver.'
+                        : nearCapacity
+                        ? 'This resource is at 90–99.9% utilization with limited remaining capacity and should be monitored for demand surges.'
+                        : 'Available capacity remains in this period.'}
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         )}
       </div>
@@ -892,6 +1033,9 @@ export const MultiPeriodPage: React.FC = () => {
 
               {activeTab === 'results' && (
                 <div className="space-y-6">
+                  {/* Rule-based Decision Summary */}
+                  {mpSolution.is_optimal && <DecisionSummary solution={mpSolution} />}
+
                   {/* Status & KPIs */}
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">

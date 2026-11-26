@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ColumnProfile(BaseModel):
@@ -66,6 +67,20 @@ class MultiPeriodSolveRequest(BaseModel):
     integer_production: bool = False
     allow_backlogging: bool = False
     capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "auto"
+    demand_multiplier: float = Field(default=1.0, gt=0.0, le=10.0)
+    capacity_multiplier: float = Field(default=1.0, gt=0.0, le=10.0)
+    production_cost_multiplier: float = Field(default=1.0, gt=0.0, le=10.0)
+
+    @field_validator(
+        "demand_multiplier",
+        "capacity_multiplier",
+        "production_cost_multiplier",
+    )
+    @classmethod
+    def _validate_finite_multiplier(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("Scenario multipliers must be finite numbers.")
+        return v
 
 
 class MathFormulationSection(BaseModel):
@@ -104,6 +119,12 @@ class MultiPeriodSolveResponse(BaseModel):
     resource_utilization: list[dict[str, Any]]
     formulation: MathFormulationSection
     message: str
+    integer_production: bool = False
+    allow_backlogging: bool = False
+    capacity_scope: str = "auto"
+    demand_multiplier: float = 1.0
+    capacity_multiplier: float = 1.0
+    production_cost_multiplier: float = 1.0
 
 
 class GPVariable(BaseModel):

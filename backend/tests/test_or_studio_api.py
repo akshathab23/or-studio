@@ -438,3 +438,127 @@ def test_mcdm_topsis():
     )
     assert len(res.rankings) == 3
     assert res.rankings[0].rank == 1
+
+
+def test_multi_period_scenario_multiplier_validation():
+    from pydantic import ValidationError
+    import pytest
+
+    base_map = MultiPeriodColumnMapping(product="product", period="period", demand="demand")
+    for bad in [0.0, -0.5, float("nan"), float("inf"), 11.0]:
+        with pytest.raises(ValidationError):
+            MultiPeriodSolveRequest(
+                dataset_id="dummy",
+                mapping=base_map,
+                demand_multiplier=bad,
+            )
+        with pytest.raises(ValidationError):
+            MultiPeriodSolveRequest(
+                dataset_id="dummy",
+                mapping=base_map,
+                capacity_multiplier=bad,
+            )
+        with pytest.raises(ValidationError):
+            MultiPeriodSolveRequest(
+                dataset_id="dummy",
+                mapping=base_map,
+                production_cost_multiplier=bad,
+            )
+
+
+def test_multi_period_whatif_parametric_overrides_and_baseline_isolation():
+    csv_data = (
+        "product,period,demand,prod_cost,inv_cost,capacity\n"
+        "A,P1,100,10,2,150\n"
+        "A,P2,100,10,2,150\n"
+    )
+    ds = upload_dataset("whatif_test.csv", csv_data.encode("utf-8"))
+    mapping = MultiPeriodColumnMapping(
+        product="product",
+        period="period",
+        demand="demand",
+        production_cost="prod_cost",
+        inventory_cost="inv_cost",
+        capacity="capacity",
+    )
+
+    # 1. Baseline
+    baseline = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            integer_production=True,
+        )
+    )
+    assert baseline.is_optimal is True
+    assert baseline.total_demand == 200.0
+    assert baseline.total_production == 200.0
+    assert baseline.objective_value == 2000.0
+    assert baseline.integer_production is True
+
+    # 2. Demand multiplier (1.2x)
+    dem_scen = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            integer_production=True,
+            demand_multiplier=1.2,
+        )
+    )
+    assert dem_scen.is_optimal is True
+    assert dem_scen.total_demand == 240.0
+    assert dem_scen.total_production == 240.0
+    assert dem_scen.objective_value == 2400.0
+    assert dem_scen.integer_production is True
+
+    # 3. Production cost multiplier (1.5x) — only production cost scales
+    cost_scen = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            integer_production=True,
+            production_cost_multiplier=1.5,
+        )
+    )
+    assert cost_scen.is_optimal is True
+    assert cost_scen.total_demand == 200.0
+    assert cost_scen.objective_value == 3000.0
+    assert cost_scen.cost_breakdown is not None
+    assert cost_scen.cost_breakdown["production_cost"] == 3000.0
+
+    # 4. Capacity multiplier (0.5x -> 75 per period < 100 demand -> Infeasible)
+    cap_infeasible = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            integer_production=True,
+            capacity_multiplier=0.5,
+        )
+    )
+    assert cap_infeasible.is_optimal is False
+    assert cap_infeasible.status == "Infeasible"
+
+    # 5. Capacity multiplier (0.8x -> 120 per period >= 100 demand -> Optimal with scaled capacity)
+    cap_feasible = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            integer_production=True,
+            capacity_multiplier=0.8,
+        )
+    )
+    assert cap_feasible.is_optimal is True
+    assert all(r["capacity"] == 120.0 for r in cap_feasible.resource_utilization)
+
+    # 6. Baseline isolation — re-solving baseline still produces original dataset values
+    baseline_after = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            integer_production=True,
+        )
+    )
+    assert baseline_after.total_demand == 200.0
+    assert baseline_after.objective_value == 2000.0
+    assert all(r["capacity"] == 150.0 for r in baseline_after.resource_utilization)
+

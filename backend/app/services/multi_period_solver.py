@@ -121,14 +121,19 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 cap_period_acc.setdefault(t, []).append(c_val)
                 cap_prod_period_acc.setdefault((p, t), []).append(c_val)
 
-    prod_cost = {k: sum(v) / len(v) for k, v in prod_cost_acc.items()}
+    demand_mult = float(req.demand_multiplier)
+    capacity_mult = float(req.capacity_multiplier)
+    prod_cost_mult = float(req.production_cost_multiplier)
+
+    demand = {k: v * demand_mult for k, v in demand.items()}
+    prod_cost = {k: (sum(v) / len(v)) * prod_cost_mult for k, v in prod_cost_acc.items()}
     inv_cost = {k: sum(v) / len(v) for k, v in inv_cost_acc.items()}
     proc_time = {k: sum(v) / len(v) for k, v in proc_time_acc.items()}
     setup_cost = {k: sum(v) / len(v) for k, v in setup_cost_acc.items()}
     setup_time = {k: sum(v) / len(v) for k, v in setup_time_acc.items()}
-    cap_period = {k: sum(v) / len(v) for k, v in cap_period_acc.items()}
-    cap_prod_period = {k: sum(v) / len(v) for k, v in cap_prod_period_acc.items()}
-    cap_resource_period = {k: sum(v) / len(v) for k, v in cap_resource_period_acc.items()}
+    cap_period = {k: (sum(v) / len(v)) * capacity_mult for k, v in cap_period_acc.items()}
+    cap_prod_period = {k: (sum(v) / len(v)) * capacity_mult for k, v in cap_prod_period_acc.items()}
+    cap_resource_period = {k: (sum(v) / len(v)) * capacity_mult for k, v in cap_resource_period_acc.items()}
     repeated_pairs = sum(1 for cnt in pair_row_counts.values() if cnt > 1)
 
     # Determine capacity scope when Resource is not mapped
@@ -473,6 +478,12 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
         resource_utilization=resource_utilization,
         formulation=formulation,
         message=msg,
+        integer_production=req.integer_production,
+        allow_backlogging=req.allow_backlogging,
+        capacity_scope=req.capacity_scope,
+        demand_multiplier=demand_mult,
+        capacity_multiplier=capacity_mult,
+        production_cost_multiplier=prod_cost_mult,
     )
 
 

@@ -112,6 +112,12 @@ export interface MultiPeriodSolveResponse {
   }[];
   formulation: MathFormulationSection;
   message: string;
+  integer_production?: boolean;
+  allow_backlogging?: boolean;
+  capacity_scope?: string;
+  demand_multiplier?: number;
+  capacity_multiplier?: number;
+  production_cost_multiplier?: number;
 }
 
 export interface GPVariable {

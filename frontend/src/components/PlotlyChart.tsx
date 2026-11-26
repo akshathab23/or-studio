@@ -6,6 +6,12 @@ interface PlotlyChartProps {
   layout?: Record<string, unknown>;
   className?: string;
   height?: number;
+  onPointClick?: (point: {
+    x?: string | number;
+    y?: number;
+    curveNumber?: number;
+    pointIndex?: number;
+  }) => void;
 }
 
 export const PlotlyChart: React.FC<PlotlyChartProps> = ({
@@ -13,8 +19,11 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
   layout = {},
   className = '',
   height = 340,
+  onPointClick,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const onPointClickRef = useRef(onPointClick);
+  onPointClickRef.current = onPointClick;
 
   useEffect(() => {
     const el = containerRef.current;
@@ -48,6 +57,31 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
       });
     });
 
+    const handlePlotlyClick = (eventData: {
+      points?: {
+        x?: string | number;
+        y?: number;
+        curveNumber?: number;
+        pointIndex?: number;
+      }[];
+    }) => {
+      const pt = eventData?.points?.[0];
+      if (pt && onPointClickRef.current) {
+        onPointClickRef.current({
+          x: pt.x,
+          y: pt.y,
+          curveNumber: pt.curveNumber,
+          pointIndex: pt.pointIndex,
+        });
+      }
+    };
+
+    const plotlyEl = el as HTMLDivElement & {
+      on?: (event: string, cb: (data: never) => void) => void;
+      removeListener?: (event: string, cb: (data: never) => void) => void;
+    };
+    plotlyEl.on?.('plotly_click', handlePlotlyClick as (data: never) => void);
+
     const observer = new ResizeObserver(() => {
       if (el && el.offsetParent !== null) {
         void Promise.resolve(plotlyApi.Plots.resize(el)).catch(() => {});
@@ -57,6 +91,7 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
 
     return () => {
       observer.disconnect();
+      plotlyEl.removeListener?.('plotly_click', handlePlotlyClick as (data: never) => void);
       try {
         plotlyApi.purge(el);
       } catch {

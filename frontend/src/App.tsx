@@ -8,6 +8,7 @@ import { GoalProgrammingPage } from './pages/GoalProgrammingPage';
 import { MCDMPage } from './pages/MCDMPage';
 import { MultiPeriodPage } from './pages/MultiPeriodPage';
 import { SolutionHistoryPage } from './pages/SolutionHistoryPage';
+import { WhatIfLabPage } from './pages/WhatIfLabPage';
 
 export const App: React.FC = () => {
   return (
@@ -21,6 +22,7 @@ export const App: React.FC = () => {
             <Route path="/mcdm" element={<MCDMPage />} />
             <Route path="/datasets" element={<DatasetExplorerPage />} />
             <Route path="/history" element={<SolutionHistoryPage />} />
+            <Route path="/what-if" element={<WhatIfLabPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Layout>

@@ -97,7 +97,12 @@ export async function solveMultiPeriod(
   datasetId: string,
   mapping: MultiPeriodColumnMapping,
   integerProduction: boolean,
-  capacityScope: 'auto' | 'per_product' | 'aggregate_period' = 'auto'
+  capacityScope: 'auto' | 'per_product' | 'aggregate_period' = 'auto',
+  multipliers?: {
+    demand_multiplier?: number;
+    capacity_multiplier?: number;
+    production_cost_multiplier?: number;
+  }
 ): Promise<MultiPeriodSolveResponse> {
   const res = await fetch(`${API_BASE}/solve/multi-period`, {
     method: 'POST',
@@ -107,6 +112,15 @@ export async function solveMultiPeriod(
       mapping,
       integer_production: integerProduction,
       capacity_scope: capacityScope,
+      ...(multipliers?.demand_multiplier !== undefined
+        ? { demand_multiplier: multipliers.demand_multiplier }
+        : {}),
+      ...(multipliers?.capacity_multiplier !== undefined
+        ? { capacity_multiplier: multipliers.capacity_multiplier }
+        : {}),
+      ...(multipliers?.production_cost_multiplier !== undefined
+        ? { production_cost_multiplier: multipliers.production_cost_multiplier }
+        : {}),
     }),
   });
   return handleResponse<MultiPeriodSolveResponse>(res);
