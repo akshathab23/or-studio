@@ -14,7 +14,7 @@ import {
   Table2,
 } from 'lucide-react';
 import { solveMultiPeriod, validateMultiPeriodMapping } from '../api/client';
-import { DecisionSummary } from '../components/DecisionSummary';
+import { DecisionIntelligencePanel } from '../components/DecisionIntelligencePanel';
 import { FormulationView } from '../components/FormulationView';
 import { PlotlyChart } from '../components/PlotlyChart';
 import { useStudio } from '../context/StudioContext';
@@ -1033,8 +1033,13 @@ export const MultiPeriodPage: React.FC = () => {
 
               {activeTab === 'results' && (
                 <div className="space-y-6">
-                  {/* Rule-based Decision Summary */}
-                  {mpSolution.is_optimal && <DecisionSummary solution={mpSolution} />}
+                  {/* Decision Intelligence Layer */}
+                  <DecisionIntelligencePanel
+                    solution={mpSolution}
+                    mapping={mapping}
+                    onSwitchTab={setActiveTab}
+                    onFocusMapping={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                  />
 
                   {/* Status & KPIs */}
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
