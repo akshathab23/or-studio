@@ -117,7 +117,7 @@ export const DatasetExplorerPage: React.FC = () => {
                 href="https://data.mendeley.com/datasets/wt4s58xwj3/4"
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 font-medium text-blue-700 underline"
+                className="inline-flex items-center gap-1 break-all font-medium text-blue-700 underline"
               >
                 data.mendeley.com/datasets/wt4s58xwj3/4
                 <ExternalLink className="h-3 w-3" />
