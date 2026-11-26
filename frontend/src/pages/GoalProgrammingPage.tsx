@@ -796,50 +796,120 @@ export const GoalProgrammingPage: React.FC = () => {
 
                   {/* Deviation Comparison */}
                   <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                    <h4 className="mb-1 text-sm font-semibold text-slate-900">
+                      Deviation Variables (D+ vs. D−)
+                    </h4>
+                    <p className="mb-3 text-xs text-slate-500">
+                      D+ = overachievement (value exceeded target); D− = underachievement (value
+                      fell short of target). A zero value means the goal was met exactly on that
+                      side.
+                    </p>
                     <PlotlyChart
+                      height={300}
                       data={[
                         {
                           x: gpSolution.goal_results.map((g) => g.name),
                           y: gpSolution.goal_results.map((g) => g.positive_deviation ?? 0),
                           name: 'D+ (Overachievement)',
                           type: 'bar',
-                          marker: { color: '#0f172a' },
+                          marker: { color: '#2563eb' },
+                          text: gpSolution.goal_results.map((g) =>
+                            (g.positive_deviation ?? 0).toLocaleString(undefined, {
+                              maximumFractionDigits: 4,
+                            })
+                          ),
+                          textposition: 'outside',
+                          cliponaxis: false,
+                          hovertemplate:
+                            '<b>%{x}</b><br>D+ (Overachievement): %{y:,.4f}<extra></extra>',
                         },
                         {
                           x: gpSolution.goal_results.map((g) => g.name),
                           y: gpSolution.goal_results.map((g) => g.negative_deviation ?? 0),
-                          name: 'D- (Underachievement)',
+                          name: 'D− (Underachievement)',
                           type: 'bar',
                           marker: { color: '#f59e0b' },
+                          text: gpSolution.goal_results.map((g) =>
+                            (g.negative_deviation ?? 0).toLocaleString(undefined, {
+                              maximumFractionDigits: 4,
+                            })
+                          ),
+                          textposition: 'outside',
+                          cliponaxis: false,
+                          hovertemplate:
+                            '<b>%{x}</b><br>D− (Underachievement): %{y:,.4f}<extra></extra>',
                         },
                       ]}
                       layout={{
-                        title: { text: 'Deviation Variables (D+ vs. D-)' },
                         barmode: 'group',
-                        xaxis: { title: 'Goal' },
-                        yaxis: { title: 'Deviation' },
+                        margin: { t: 24, r: 16, b: 56, l: 56 },
+                        legend: {
+                          orientation: 'h',
+                          x: 0,
+                          y: 1.02,
+                          xanchor: 'left',
+                          yanchor: 'bottom',
+                          font: { size: 11 },
+                        },
+                        xaxis: { title: 'Goal', automargin: true },
+                        yaxis: { title: 'Deviation', automargin: true },
                       }}
                     />
                   </div>
 
                   {/* Priority / Weighted Penalties */}
                   <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs lg:col-span-2">
-                    <PlotlyChart
-                      data={[
-                        {
-                          x: gpSolution.goal_results.map((g) => `${g.name} (P${g.priority})`),
-                          y: gpSolution.goal_results.map((g) => g.penalty_contribution ?? 0),
-                          name: 'Weighted Penalty',
-                          type: 'bar',
-                          marker: { color: '#2563eb' },
-                        },
-                      ]}
-                      layout={{
-                        title: { text: 'Weighted Penalty Contribution by Goal & Priority' },
-                        xaxis: { title: 'Goal (Priority)' },
-                        yaxis: { title: 'Penalty' },
-                      }}
-                    />
+                    <h4 className="mb-1 text-sm font-semibold text-slate-900">
+                      Weighted Penalty Contribution by Goal &amp; Priority
+                    </h4>
+                    <p className="mb-3 text-xs text-slate-500">
+                      Each bar shows the weighted penalty a goal contributes to the objective
+                      function. A zero contribution means the goal was fully satisfied (no
+                      penalised deviation).
+                    </p>
+                    {gpSolution.goal_results.some(
+                      (g) => g.penalty_contribution !== null
+                    ) ? (
+                      <PlotlyChart
+                        height={Math.max(260, gpSolution.goal_results.length * 48 + 80)}
+                        data={[
+                          {
+                            y: gpSolution.goal_results.map(
+                              (g) => `${g.name} · P${g.priority} · w=${g.weight}`
+                            ),
+                            x: gpSolution.goal_results.map(
+                              (g) => g.penalty_contribution ?? 0
+                            ),
+                            name: 'Weighted Penalty',
+                            type: 'bar',
+                            orientation: 'h',
+                            marker: {
+                              color: gpSolution.goal_results.map((g) =>
+                                (g.penalty_contribution ?? 0) === 0 ? '#94a3b8' : '#2563eb'
+                              ),
+                            },
+                            text: gpSolution.goal_results.map((g) =>
+                              (g.penalty_contribution ?? 0).toLocaleString(undefined, {
+                                maximumFractionDigits: 4,
+                              })
+                            ),
+                            textposition: 'outside',
+                            cliponaxis: false,
+                            hovertemplate:
+                              '<b>%{y}</b><br>Weighted Penalty: %{x:,.4f}<extra></extra>',
+                          },
+                        ]}
+                        layout={{
+                          margin: { t: 24, r: 80, b: 56, l: 220 },
+                          xaxis: { title: 'Weighted Penalty Contribution', automargin: true },
+                          yaxis: { automargin: true, autorange: 'reversed' },
+                        }}
+                      />
+                    ) : (
+                      <p className="py-6 text-center text-sm text-slate-500">
+                        Penalty contribution data is unavailable for this solution.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
