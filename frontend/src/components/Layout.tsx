@@ -6,6 +6,7 @@ import {
   FileSpreadsheet,
   FlaskConical,
   History,
+  Layers,
   LayoutDashboard,
   Menu,
   Scale,
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { to: '/goal-programming', label: 'Goal Programming', icon: Target },
   { to: '/mcdm', label: 'MCDM', icon: Scale },
   { to: '/what-if', label: 'What-If Lab', icon: FlaskConical },
+  { to: '/scenarios', label: 'Scenario Management', icon: Layers },
   { to: '/datasets', label: 'Dataset Explorer', icon: Database },
   { to: '/history', label: 'Solution History', icon: History },
 ];

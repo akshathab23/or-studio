@@ -4,6 +4,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
+  BookmarkPlus,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 import { solveMultiPeriod } from '../api/client';
 import { PlotlyChart } from '../components/PlotlyChart';
+import { SaveScenarioModal } from '../components/SaveScenarioModal';
 import { useStudio } from '../context/StudioContext';
 import type { MultiPeriodSolveResponse } from '../types/or';
 
@@ -196,6 +198,8 @@ export const WhatIfLabPage: React.FC = () => {
   const [solving, setSolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showComparison, setShowComparison] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   const applyPreset = (preset: ScenarioPreset) => {
     setSelectedPreset(preset.id);
@@ -510,6 +514,15 @@ export const WhatIfLabPage: React.FC = () => {
                   )}
                   {solving ? 'Solving Scenario…' : 'Run Scenario'}
                 </button>
+                <button
+                  type="button"
+                  disabled={!mpMapping}
+                  onClick={() => setSaveModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <BookmarkPlus className="h-4 w-4 text-blue-600" />
+                  Save Scenario
+                </button>
                 {scenarioResult && (
                   <span
                     className={`inline-flex items-center gap-1.5 text-xs font-medium ${
@@ -525,6 +538,19 @@ export const WhatIfLabPage: React.FC = () => {
                   </span>
                 )}
               </div>
+
+              {savedNotice && (
+                <div className="mt-4 flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800">
+                  <span>{savedNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/scenarios')}
+                    className="font-semibold underline hover:text-emerald-950"
+                  >
+                    View in Scenario Library
+                  </button>
+                </div>
+              )}
 
               {error && (
                 <div className="mt-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
@@ -758,6 +784,36 @@ export const WhatIfLabPage: React.FC = () => {
             </section>
           )}
         </>
+      )}
+      {hasBaseline && mpMapping && (
+        <SaveScenarioModal
+          isOpen={saveModalOpen}
+          onClose={() => setSaveModalOpen(false)}
+          defaultName={
+            selectedPreset !== 'baseline' && selectedPreset !== 'custom'
+              ? PRESETS.find((p) => p.id === selectedPreset)?.label ?? 'What-If Scenario'
+              : `What-If (D×${demandMult.toFixed(2)}, C×${capacityMult.toFixed(2)}, P×${costMult.toFixed(2)})`
+          }
+          datasetId={dataset?.dataset_id ?? null}
+          datasetName={dataset?.filename ?? null}
+          activeSheet={dataset?.active_sheet ?? null}
+          inputConfig={{
+            mapping: mpMapping,
+            integer_production: mpSolution?.integer_production ?? mpIntegerProd,
+            allow_backlogging: mpSolution?.allow_backlogging ?? false,
+            capacity_scope:
+              (mpSolution?.capacity_scope as 'auto' | 'per_product' | 'aggregate_period' | undefined) ??
+              mpCapacityScope,
+            demand_multiplier: demandMult,
+            capacity_multiplier: capacityMult,
+            production_cost_multiplier: costMult,
+            objective_sense: mpSolution?.objective_sense ?? 'Minimize',
+          }}
+          resultSnapshot={scenarioResult}
+          onSaved={(saved) =>
+            setSavedNotice(`Scenario "${saved.name}" saved to Scenario Library.`)
+          }
+        />
       )}
     </div>
   );

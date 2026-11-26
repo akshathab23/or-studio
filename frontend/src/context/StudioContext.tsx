@@ -6,6 +6,7 @@ import type {
   MultiPeriodColumnMapping,
   MultiPeriodSolveResponse,
   PublicDatasetImportResponse,
+  SavedScenarioDetail,
   SolutionHistoryItem,
 } from '../types/or';
 
@@ -22,6 +23,8 @@ interface StudioContextValue {
   setMpIntegerProd: (v: boolean) => void;
   mpSolution: MultiPeriodSolveResponse | null;
   setMpSolution: (s: MultiPeriodSolveResponse | null) => void;
+  restoredScenario: SavedScenarioDetail | null;
+  setRestoredScenario: (s: SavedScenarioDetail | null) => void;
   gpSolution: GoalProgrammingSolveResponse | null;
   setGpSolution: (s: GoalProgrammingSolveResponse | null) => void;
   mcdmSolution: MCDMSolveResponse | null;
@@ -44,6 +47,7 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   >('auto');
   const [mpIntegerProd, setMpIntegerProd] = useState<boolean>(false);
   const [mpSolution, setMpSolution] = useState<MultiPeriodSolveResponse | null>(null);
+  const [restoredScenario, setRestoredScenario] = useState<SavedScenarioDetail | null>(null);
   const [gpSolution, setGpSolution] = useState<GoalProgrammingSolveResponse | null>(null);
   const [mcdmSolution, setMcdmSolution] = useState<MCDMSolveResponse | null>(null);
   const [history, setHistory] = useState<SolutionHistoryItem[]>(() => {
@@ -96,6 +100,8 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setMpIntegerProd,
         mpSolution,
         setMpSolution,
+        restoredScenario,
+        setRestoredScenario,
         gpSolution,
         setGpSolution,
         mcdmSolution,

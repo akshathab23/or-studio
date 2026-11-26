@@ -276,3 +276,55 @@ export interface PublicDatasetImportResponse {
   suggested_mapping: MultiPeriodColumnMapping;
   suggested_capacity_scope: 'auto' | 'per_product' | 'aggregate_period';
 }
+
+export interface ScenarioInputConfig {
+  mapping: MultiPeriodColumnMapping;
+  integer_production: boolean;
+  allow_backlogging: boolean;
+  capacity_scope: 'auto' | 'per_product' | 'aggregate_period';
+  demand_multiplier: number;
+  capacity_multiplier: number;
+  production_cost_multiplier: number;
+  objective_sense: string;
+}
+
+export interface SavedScenarioSummary {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  module: 'multi-period';
+  dataset_id: string | null;
+  dataset_name: string | null;
+  active_sheet: string | null;
+  objective_sense: string;
+  status: string;
+  is_optimal: boolean;
+  constraints_feasible: boolean;
+  objective_value: number | null;
+  has_result_snapshot: boolean;
+  input_config: ScenarioInputConfig;
+}
+
+export interface SavedScenarioDetail extends SavedScenarioSummary {
+  result_snapshot: MultiPeriodSolveResponse | null;
+}
+
+export interface ScenarioCreateRequest {
+  name: string;
+  description: string;
+  module: 'multi-period';
+  dataset_id: string | null;
+  dataset_name: string | null;
+  active_sheet: string | null;
+  input_config: ScenarioInputConfig;
+  result_snapshot: MultiPeriodSolveResponse | null;
+}
+
+export interface ScenarioUpdateRequest {
+  name?: string;
+  description?: string;
+  input_config?: ScenarioInputConfig;
+  result_snapshot?: MultiPeriodSolveResponse | null;
+}

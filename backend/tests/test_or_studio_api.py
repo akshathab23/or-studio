@@ -562,3 +562,145 @@ def test_multi_period_whatif_parametric_overrides_and_baseline_isolation():
     assert baseline_after.objective_value == 2000.0
     assert all(r["capacity"] == 150.0 for r in baseline_after.resource_utilization)
 
+
+def test_scenario_management_crud_persistence_and_validation(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+    import pytest
+    from app.main import (
+        api_create_scenario,
+        api_delete_scenario,
+        api_get_scenario,
+        api_list_scenarios,
+        api_update_scenario,
+    )
+    from app.schemas import ScenarioCreateRequest, ScenarioInputConfig, ScenarioUpdateRequest
+
+    db_file = tmp_path / "test_scenarios.db"
+    monkeypatch.setenv("OR_STUDIO_SCENARIO_DB", str(db_file))
+
+    csv_data = (
+        "product,period,demand,prod_cost,inv_cost,capacity\n"
+        "A,P1,100,10,2,150\n"
+        "A,P2,100,10,2,150\n"
+    )
+    ds = upload_dataset("scen_crud.csv", csv_data.encode("utf-8"))
+    mapping = MultiPeriodColumnMapping(
+        product="product",
+        period="period",
+        demand="demand",
+        production_cost="prod_cost",
+        inventory_cost="inv_cost",
+        capacity="capacity",
+    )
+
+    opt_sol = api_solve_multi_period(
+        MultiPeriodSolveRequest(dataset_id=ds.dataset_id, mapping=mapping)
+    )
+    inf_sol = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id, mapping=mapping, capacity_multiplier=0.5
+        )
+    )
+    assert opt_sol.is_optimal is True
+    assert inf_sol.is_optimal is False
+
+    # 1. Invalid inputs (empty name, non-finite multiplier)
+    with pytest.raises(ValidationError):
+        ScenarioCreateRequest(
+            name="   ",
+            input_config=ScenarioInputConfig(mapping=mapping),
+        )
+    with pytest.raises(ValidationError):
+        ScenarioInputConfig(mapping=mapping, demand_multiplier=float("nan"))
+
+    # 2. Save optimal scenario
+    s1 = api_create_scenario(
+        ScenarioCreateRequest(
+            name="Baseline Plan",
+            description="Initial baseline run",
+            dataset_id=ds.dataset_id,
+            dataset_name=ds.filename,
+            input_config=ScenarioInputConfig(mapping=mapping),
+            result_snapshot=opt_sol,
+        )
+    )
+    assert s1.name == "Baseline Plan"
+    assert s1.is_optimal is True
+    assert s1.objective_value == 2000.0
+    assert s1.has_result_snapshot is True
+
+    # 3. Duplicate name handling (case-insensitive -> 409)
+    with pytest.raises(HTTPException) as exc_dup:
+        api_create_scenario(
+            ScenarioCreateRequest(
+                name="baseline plan",
+                input_config=ScenarioInputConfig(mapping=mapping),
+            )
+        )
+    assert exc_dup.value.status_code == 409
+
+    # 4. Save infeasible scenario
+    s2 = api_create_scenario(
+        ScenarioCreateRequest(
+            name="Tight Capacity 50%",
+            description="Infeasible stress test",
+            dataset_id=ds.dataset_id,
+            dataset_name=ds.filename,
+            input_config=ScenarioInputConfig(mapping=mapping, capacity_multiplier=0.5),
+            result_snapshot=inf_sol,
+        )
+    )
+    assert s2.is_optimal is False
+    assert s2.status == "Infeasible"
+    assert s2.has_result_snapshot is True
+
+    # 5. List & Retrieve by ID (verifies SQLite persistence)
+    listed = api_list_scenarios()
+    assert len(listed) == 2
+    fetched = api_get_scenario(s1.id)
+    assert fetched.result_snapshot is not None
+    assert fetched.result_snapshot.objective_value == 2000.0
+    assert fetched.input_config.mapping.product == "product"
+
+    # 6. Update metadata (rename & description) + duplicate rename rejected
+    updated = api_update_scenario(
+        s2.id,
+        ScenarioUpdateRequest(name="Capacity Crunch 50%", description="Updated desc"),
+    )
+    assert updated.name == "Capacity Crunch 50%"
+    assert updated.description == "Updated desc"
+    with pytest.raises(HTTPException) as exc_ren_dup:
+        api_update_scenario(s2.id, ScenarioUpdateRequest(name="Baseline Plan"))
+    assert exc_ren_dup.value.status_code == 409
+
+    # 6b. Snapshot immutability on re-run & explicit Update Saved Snapshot
+    rerun_cost = api_solve_multi_period(
+        MultiPeriodSolveRequest(
+            dataset_id=ds.dataset_id,
+            mapping=mapping,
+            production_cost_multiplier=1.5,
+        )
+    )
+    assert rerun_cost.objective_value == 3000.0
+    # Saved snapshot for s1 must remain 2000.0 until explicitly updated
+    assert api_get_scenario(s1.id).objective_value == 2000.0
+
+    updated_snap = api_update_scenario(
+        s1.id,
+        ScenarioUpdateRequest(result_snapshot=rerun_cost),
+    )
+    assert updated_snap.objective_value == 3000.0
+    assert api_get_scenario(s1.id).objective_value == 3000.0
+
+    # 7. Delete & Missing scenario 404
+    api_delete_scenario(s2.id)
+    assert len(api_list_scenarios()) == 1
+    with pytest.raises(HTTPException) as exc_404:
+        api_get_scenario(s2.id)
+    assert exc_404.value.status_code == 404
+    with pytest.raises(HTTPException) as exc_del_404:
+        api_delete_scenario(s2.id)
+    assert exc_del_404.value.status_code == 404
+
+

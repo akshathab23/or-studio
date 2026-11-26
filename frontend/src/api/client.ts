@@ -11,6 +11,9 @@ import type {
   PublicDatasetCatalogItem,
   PublicDatasetImportRequest,
   PublicDatasetImportResponse,
+  SavedScenarioDetail,
+  ScenarioCreateRequest,
+  ScenarioUpdateRequest,
 } from '../types/or';
 
 const rawBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? '';
@@ -164,4 +167,47 @@ export async function solveMCDM(
     body: JSON.stringify({ method, criteria, alternatives }),
   });
   return handleResponse<MCDMSolveResponse>(res);
+}
+
+export async function fetchDatasetSummary(datasetId: string): Promise<DatasetSummary> {
+  const res = await fetch(`${API_BASE}/datasets/${datasetId}`);
+  return handleResponse<DatasetSummary>(res);
+}
+
+export async function fetchScenarios(): Promise<SavedScenarioDetail[]> {
+  const res = await fetch(`${API_BASE}/scenarios`);
+  return handleResponse<SavedScenarioDetail[]>(res);
+}
+
+export async function fetchScenarioById(scenarioId: string): Promise<SavedScenarioDetail> {
+  const res = await fetch(`${API_BASE}/scenarios/${scenarioId}`);
+  return handleResponse<SavedScenarioDetail>(res);
+}
+
+export async function saveScenario(req: ScenarioCreateRequest): Promise<SavedScenarioDetail> {
+  const res = await fetch(`${API_BASE}/scenarios`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return handleResponse<SavedScenarioDetail>(res);
+}
+
+export async function updateScenario(
+  scenarioId: string,
+  req: ScenarioUpdateRequest
+): Promise<SavedScenarioDetail> {
+  const res = await fetch(`${API_BASE}/scenarios/${scenarioId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return handleResponse<SavedScenarioDetail>(res);
+}
+
+export async function deleteScenario(scenarioId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/scenarios/${scenarioId}`, {
+    method: 'DELETE',
+  });
+  await handleResponse(res);
 }

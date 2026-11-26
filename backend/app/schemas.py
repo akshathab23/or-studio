@@ -278,3 +278,84 @@ class PublicDatasetImportResponse(BaseModel):
     assumptions: list[ParameterAssumptionItem]
     suggested_mapping: MultiPeriodColumnMapping
     suggested_capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "per_product"
+
+
+class ScenarioInputConfig(BaseModel):
+    mapping: MultiPeriodColumnMapping
+    integer_production: bool = False
+    allow_backlogging: bool = False
+    capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "auto"
+    demand_multiplier: float = Field(default=1.0, gt=0.0, le=10.0)
+    capacity_multiplier: float = Field(default=1.0, gt=0.0, le=10.0)
+    production_cost_multiplier: float = Field(default=1.0, gt=0.0, le=10.0)
+    objective_sense: str = "Minimize"
+
+    @field_validator(
+        "demand_multiplier",
+        "capacity_multiplier",
+        "production_cost_multiplier",
+    )
+    @classmethod
+    def _validate_finite_multiplier(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("Scenario multipliers must be finite numbers.")
+        return v
+
+
+class ScenarioCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    module: Literal["multi-period"] = "multi-period"
+    dataset_id: str | None = None
+    dataset_name: str | None = None
+    active_sheet: str | None = None
+    input_config: ScenarioInputConfig
+    result_snapshot: MultiPeriodSolveResponse | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("Scenario name cannot be empty.")
+        return trimmed
+
+
+class ScenarioUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    input_config: ScenarioInputConfig | None = None
+    result_snapshot: MultiPeriodSolveResponse | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_optional_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("Scenario name cannot be empty.")
+        return trimmed
+
+
+class SavedScenarioSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+    created_at: str
+    updated_at: str
+    module: Literal["multi-period"]
+    dataset_id: str | None
+    dataset_name: str | None
+    active_sheet: str | None
+    objective_sense: str
+    status: str
+    is_optimal: bool
+    constraints_feasible: bool
+    objective_value: float | None
+    has_result_snapshot: bool
+    input_config: ScenarioInputConfig
+
+
+class SavedScenarioDetail(SavedScenarioSummary):
+    result_snapshot: MultiPeriodSolveResponse | None = None

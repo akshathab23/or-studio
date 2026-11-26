@@ -19,6 +19,9 @@ from app.schemas import (
     PublicDatasetCatalogItem,
     PublicDatasetImportRequest,
     PublicDatasetImportResponse,
+    SavedScenarioDetail,
+    ScenarioCreateRequest,
+    ScenarioUpdateRequest,
     SheetSelectRequest,
 )
 from app.services.dataset_service import (
@@ -33,6 +36,13 @@ from app.services.goal_programming_solver import solve_goal_programming
 from app.services.mcdm_solver import solve_mcdm
 from app.services.multi_period_solver import solve_multi_period
 from app.services.public_dataset_service import import_public_dataset, list_public_datasets
+from app.services.scenario_service import (
+    create_scenario,
+    delete_scenario,
+    get_scenario,
+    list_scenarios,
+    update_scenario,
+)
 
 app = FastAPI(
     title="OR Studio API",
@@ -175,3 +185,47 @@ async def api_import_public_dataset(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/scenarios", response_model=list[SavedScenarioDetail])
+def api_list_scenarios() -> list[SavedScenarioDetail]:
+    return list_scenarios()
+
+
+@app.post("/api/scenarios", response_model=SavedScenarioDetail, status_code=201)
+def api_create_scenario(req: ScenarioCreateRequest) -> SavedScenarioDetail:
+    try:
+        return create_scenario(req)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/scenarios/{scenario_id}", response_model=SavedScenarioDetail)
+def api_get_scenario(scenario_id: str) -> SavedScenarioDetail:
+    try:
+        return get_scenario(scenario_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/api/scenarios/{scenario_id}", response_model=SavedScenarioDetail)
+def api_update_scenario(scenario_id: str, req: ScenarioUpdateRequest) -> SavedScenarioDetail:
+    try:
+        return update_scenario(scenario_id, req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/scenarios/{scenario_id}")
+def api_delete_scenario(scenario_id: str) -> dict[str, str]:
+    try:
+        delete_scenario(scenario_id)
+        return {"status": "deleted", "scenario_id": scenario_id}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -7,6 +7,7 @@ import { DatasetExplorerPage } from './pages/DatasetExplorerPage';
 import { GoalProgrammingPage } from './pages/GoalProgrammingPage';
 import { MCDMPage } from './pages/MCDMPage';
 import { MultiPeriodPage } from './pages/MultiPeriodPage';
+import { ScenariosPage } from './pages/ScenariosPage';
 import { SolutionHistoryPage } from './pages/SolutionHistoryPage';
 import { WhatIfLabPage } from './pages/WhatIfLabPage';
 
@@ -23,6 +24,7 @@ export const App: React.FC = () => {
             <Route path="/datasets" element={<DatasetExplorerPage />} />
             <Route path="/history" element={<SolutionHistoryPage />} />
             <Route path="/what-if" element={<WhatIfLabPage />} />
+            <Route path="/scenarios" element={<ScenariosPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Layout>

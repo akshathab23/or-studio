@@ -4,12 +4,14 @@ import {
   Activity,
   AlertCircle,
   AlertTriangle,
+  BookmarkPlus,
   CheckCircle2,
   Database,
   Download,
   LineChart,
   Loader2,
   Play,
+  RotateCcw,
   Sigma,
   Table2,
 } from 'lucide-react';
@@ -17,8 +19,13 @@ import { solveMultiPeriod, validateMultiPeriodMapping } from '../api/client';
 import { DecisionIntelligencePanel } from '../components/DecisionIntelligencePanel';
 import { FormulationView } from '../components/FormulationView';
 import { PlotlyChart } from '../components/PlotlyChart';
+import { SaveScenarioModal } from '../components/SaveScenarioModal';
 import { useStudio } from '../context/StudioContext';
-import type { MappingValidationResponse, MultiPeriodColumnMapping } from '../types/or';
+import type {
+  MappingValidationResponse,
+  MultiPeriodColumnMapping,
+  MultiPeriodSolveResponse,
+} from '../types/or';
 
 const OPTIONAL_FIELDS: { key: keyof MultiPeriodColumnMapping; label: string; hint: string }[] = [
   { key: 'production_cost', label: 'Production Cost', hint: 'Unit production cost' },
@@ -41,8 +48,10 @@ export const MultiPeriodPage: React.FC = () => {
     mpCapacityScope,
     mpIntegerProd: integerProd,
     setMpIntegerProd: setIntegerProd,
-    mpSolution,
+    mpSolution: baselineMpSolution,
     setMpSolution,
+    restoredScenario,
+    setRestoredScenario,
     addHistoryItem,
   } = useStudio();
 
@@ -67,6 +76,18 @@ export const MultiPeriodPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'results' | 'graphs' | 'formulation'>('results');
   const [selectedFlowProduct, setSelectedFlowProduct] = useState<string>('__ALL__');
   const [selectedResource, setSelectedResource] = useState<string | null>(null);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [savedBanner, setSavedBanner] = useState<string | null>(null);
+  const [restoredSolveResult, setRestoredSolveResult] =
+    useState<MultiPeriodSolveResponse | null>(null);
+
+  const mpSolution = restoredScenario
+    ? restoredSolveResult ?? restoredScenario.result_snapshot
+    : baselineMpSolution;
+
+  useEffect(() => {
+    setRestoredSolveResult(null);
+  }, [restoredScenario?.id]);
 
   useEffect(() => {
     setSelectedFlowProduct('__ALL__');
@@ -749,13 +770,26 @@ export const MultiPeriodPage: React.FC = () => {
         setSolving(false);
         return;
       }
+      const mults = restoredScenario
+        ? {
+            demand_multiplier: restoredScenario.input_config.demand_multiplier,
+            capacity_multiplier: restoredScenario.input_config.capacity_multiplier,
+            production_cost_multiplier:
+              restoredScenario.input_config.production_cost_multiplier,
+          }
+        : undefined;
       const sol = await solveMultiPeriod(
         dataset.dataset_id,
         cleaned,
         integerProd,
-        mpCapacityScope
+        mpCapacityScope,
+        mults
       );
-      setMpSolution(sol);
+      if (restoredScenario) {
+        setRestoredSolveResult(sol);
+      } else {
+        setMpSolution(sol);
+      }
       setActiveTab('results');
       addHistoryItem({
         module: 'multi-period',
@@ -809,7 +843,16 @@ export const MultiPeriodPage: React.FC = () => {
       </div>
 
       {!dataset ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-xs">
+        <div className="space-y-4">
+          {restoredScenario && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-xs text-amber-900">
+              <span className="font-semibold">
+                Restored Scenario &ldquo;{restoredScenario.name}&rdquo;:
+              </span>{' '}
+              The original dataset (<code>{restoredScenario.dataset_name ?? restoredScenario.dataset_id ?? 'unknown'}</code>) is no longer in active backend memory. Re-upload it in Dataset Explorer to re-optimize with the restored configuration.
+            </div>
+          )}
+          <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-xs">
           <Database className="mx-auto h-8 w-8 text-slate-400" />
           <h2 className="mt-3 text-base font-semibold text-slate-900">No Dataset Loaded</h2>
           <p className="mt-1 text-sm text-slate-600">
@@ -822,9 +865,50 @@ export const MultiPeriodPage: React.FC = () => {
           >
             Go to Dataset Explorer
           </button>
+          </div>
         </div>
       ) : (
         <>
+          {restoredScenario && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
+              <div className="flex items-start gap-2">
+                <RotateCcw className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                <div>
+                  <span className="font-semibold">
+                    Restored Scenario: &ldquo;{restoredScenario.name}&rdquo;
+                  </span>{' '}
+                  (Demand ×{restoredScenario.input_config.demand_multiplier.toFixed(2)}, Cap ×
+                  {restoredScenario.input_config.capacity_multiplier.toFixed(2)}, Cost ×
+                  {restoredScenario.input_config.production_cost_multiplier.toFixed(2)}). Editing
+                  or re-solving here will not overwrite your saved snapshot or baseline.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRestoredScenario(null);
+                  setRestoredSolveResult(null);
+                }}
+                className="rounded-lg border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+              >
+                Exit Restored Mode
+              </button>
+            </div>
+          )}
+
+          {savedBanner && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800">
+              <span>{savedBanner}</span>
+              <button
+                type="button"
+                onClick={() => navigate('/scenarios')}
+                className="font-semibold underline hover:text-emerald-950"
+              >
+                Open Scenario Library
+              </button>
+            </div>
+          )}
+
           {/* Column Mapping Card */}
           <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
@@ -955,6 +1039,16 @@ export const MultiPeriodPage: React.FC = () => {
                   <Play className="h-4 w-4" />
                 )}
                 Solve Model
+              </button>
+
+              <button
+                type="button"
+                disabled={!mapping.product || !mapping.period || !mapping.demand}
+                onClick={() => setSaveModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <BookmarkPlus className="h-4 w-4 text-blue-600" />
+                Save Scenario
               </button>
             </div>
 
@@ -1228,6 +1322,35 @@ export const MultiPeriodPage: React.FC = () => {
           )}
         </>
       )}
+      <SaveScenarioModal
+        isOpen={saveModalOpen}
+        onClose={() => setSaveModalOpen(false)}
+        defaultName={
+          restoredScenario
+            ? `${restoredScenario.name} (Copy)`
+            : dataset
+            ? `Multi-Period (${dataset.filename})`
+            : 'Multi-Period Scenario'
+        }
+        datasetId={dataset?.dataset_id ?? null}
+        datasetName={dataset?.filename ?? null}
+        activeSheet={dataset?.active_sheet ?? null}
+        inputConfig={{
+          mapping: cleanMapping(),
+          integer_production: integerProd,
+          allow_backlogging: false,
+          capacity_scope: mpCapacityScope,
+          demand_multiplier: restoredScenario?.input_config.demand_multiplier ?? 1.0,
+          capacity_multiplier: restoredScenario?.input_config.capacity_multiplier ?? 1.0,
+          production_cost_multiplier:
+            restoredScenario?.input_config.production_cost_multiplier ?? 1.0,
+          objective_sense: mpSolution?.objective_sense ?? 'Minimize',
+        }}
+        resultSnapshot={mpSolution}
+        onSaved={(saved) =>
+          setSavedBanner(`Scenario "${saved.name}" saved to Scenario Library.`)
+        }
+      />
     </div>
   );
 };
