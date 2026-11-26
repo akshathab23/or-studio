@@ -15,10 +15,14 @@ import type {
 
 const rawBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? '';
 const normalizedBase = rawBase.replace(/\/+$/, '');
-const API_BASE = normalizedBase
-  ? normalizedBase.endsWith('/api')
-    ? normalizedBase
-    : `${normalizedBase}/api`
+const withProtocol =
+  normalizedBase && !/^https?:\/\//i.test(normalizedBase)
+    ? `https://${normalizedBase}`
+    : normalizedBase;
+const API_BASE = withProtocol
+  ? withProtocol.endsWith('/api')
+    ? withProtocol
+    : `${withProtocol}/api`
   : '/api';
 
 async function handleResponse<T>(res: Response): Promise<T> {
