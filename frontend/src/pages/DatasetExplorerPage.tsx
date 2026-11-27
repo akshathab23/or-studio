@@ -1,20 +1,24 @@
 import React, { useState } from 'react';
-import { CloudDownload, Database, ExternalLink, Info, Upload } from 'lucide-react';
-import { deleteDataset, selectDatasetSheet, uploadDataset } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import { AlertCircle, ArrowRight, CloudDownload, Database, ExternalLink, Info, Upload } from 'lucide-react';
+import { ApiError, deleteDataset, selectDatasetSheet, uploadDataset } from '../api/client';
 import { DatasetPreview } from '../components/DatasetPreview';
 import { DatasetUploader } from '../components/DatasetUploader';
 import { PublicDatasetImporter } from '../components/PublicDatasetImporter';
 import { useStudio } from '../context/StudioContext';
 
 export const DatasetExplorerPage: React.FC = () => {
+  const navigate = useNavigate();
   const { dataset, setDataset, setPublicImport, setMpMapping, setMpSolution } = useStudio();
   const [sourceMode, setSourceMode] = useState<'upload' | 'public'>('upload');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<{ message: string; isInUse: boolean } | null>(null);
 
   const handleUpload = async (file: File) => {
     setLoading(true);
     setError(null);
+    setRemoveError(null);
     try {
       const summary = await uploadDataset(file);
       setDataset(summary);
@@ -32,6 +36,7 @@ export const DatasetExplorerPage: React.FC = () => {
     if (!dataset) return;
     setLoading(true);
     setError(null);
+    setRemoveError(null);
     try {
       const updated = await selectDatasetSheet(dataset.dataset_id, sheetName);
       setDataset(updated);
@@ -48,7 +53,7 @@ export const DatasetExplorerPage: React.FC = () => {
   const handleRemove = async () => {
     if (!dataset) return;
     setLoading(true);
-    setError(null);
+    setRemoveError(null);
     try {
       await deleteDataset(dataset.dataset_id);
       setDataset(null);
@@ -56,7 +61,11 @@ export const DatasetExplorerPage: React.FC = () => {
       setMpMapping(null);
       setMpSolution(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove dataset.');
+      const isInUse = err instanceof ApiError && err.status === 409;
+      setRemoveError({
+        message: err instanceof Error ? err.message : 'Failed to remove dataset.',
+        isInUse,
+      });
     } finally {
       setLoading(false);
     }
@@ -134,12 +143,59 @@ export const DatasetExplorerPage: React.FC = () => {
       )}
 
       {dataset ? (
-        <DatasetPreview
-          dataset={dataset}
-          onSelectSheet={handleSelectSheet}
-          onRemoveDataset={handleRemove}
-          loading={loading}
-        />
+        <div className="space-y-4">
+          {removeError && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-5 py-3.5 text-xs text-rose-900 shadow-xs"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                <div>
+                  <div className="font-semibold">
+                    {removeError.isInUse
+                      ? 'Dataset retained — referenced by saved scenarios'
+                      : 'Unable to remove dataset'}
+                  </div>
+                  <div className="mt-0.5 text-rose-800">{removeError.message}</div>
+                </div>
+              </div>
+              {removeError.isInUse && (
+                <button
+                  type="button"
+                  onClick={() => navigate('/scenarios')}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100"
+                >
+                  Open Scenario Library
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+          {!loading && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/60 px-5 py-3.5 shadow-xs">
+              <div className="text-xs text-slate-700">
+                <span className="font-semibold text-slate-900">Dataset ready:</span>{' '}
+                <span className="font-medium">{dataset.filename}</span> ({dataset.row_count.toLocaleString()}{' '}
+                rows, {dataset.column_count} columns). Proceed to map parameters and solve.
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/multi-period')}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-blue-700"
+              >
+                Next: Configure &amp; Solve
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          <DatasetPreview
+            dataset={dataset}
+            onSelectSheet={handleSelectSheet}
+            onRemoveDataset={handleRemove}
+            loading={loading}
+          />
+        </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-xs">
           <p className="text-sm font-medium text-slate-700">No dataset currently loaded</p>

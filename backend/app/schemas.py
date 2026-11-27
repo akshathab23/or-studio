@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ColumnProfile(BaseModel):
@@ -27,6 +27,45 @@ class DatasetSummary(BaseModel):
     columns: list[ColumnProfile]
     preview_rows: list[dict[str, Any]]
     preview_limit: int
+
+
+class DatasetListItem(BaseModel):
+    dataset_id: str
+    filename: str
+    file_type: Literal["csv", "xlsx"]
+    sheets: list[str]
+    active_sheet: str | None
+    size_bytes: int
+    created_at: str
+    last_accessed_at: str
+
+
+class DatasetCleanupReport(BaseModel):
+    dry_run: bool
+    cleanup_enabled: bool
+    ttl_hours: float
+    max_storage_mb: float
+    min_dataset_age_minutes: float
+    temp_file_grace_minutes: float
+    ordering_policy: str
+    datasets_scanned: int
+    eligible_datasets: list[str]
+    datasets_deleted: list[str]
+    bytes_freed: int
+    referenced_datasets_skipped: list[str]
+    recent_datasets_skipped: list[str]
+    other_datasets_skipped: list[str]
+    temp_files_scanned: int
+    temp_files_removed: list[str]
+    orphan_files_scanned: int
+    orphan_files_removed: list[str]
+    missing_file_findings: list[str]
+    missing_metadata_findings: list[str]
+    failed_operations: list[str]
+    warnings: list[str]
+    quota_target_achieved: bool
+    total_storage_bytes_before: int
+    total_storage_bytes_after: int
 
 
 class SheetSelectRequest(BaseModel):
@@ -64,6 +103,7 @@ class MappingValidationResponse(BaseModel):
 class MultiPeriodSolveRequest(BaseModel):
     dataset_id: str
     mapping: MultiPeriodColumnMapping
+    sheet_name: str | None = None
     integer_production: bool = False
     allow_backlogging: bool = False
     capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "auto"
@@ -338,6 +378,21 @@ class ScenarioUpdateRequest(BaseModel):
         return trimmed
 
 
+class ScenarioReattachRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=1)
+    active_sheet: str | None = None
+    invalidate_snapshot: bool
+
+    @field_validator("invalidate_snapshot")
+    @classmethod
+    def _require_invalidate_snapshot(cls, v: bool) -> bool:
+        if v is not True:
+            raise ValueError(
+                "invalidate_snapshot must be explicitly true when re-attaching a scenario to a replacement dataset."
+            )
+        return v
+
+
 class SavedScenarioSummary(BaseModel):
     id: str
     name: str
@@ -359,3 +414,197 @@ class SavedScenarioSummary(BaseModel):
 
 class SavedScenarioDetail(SavedScenarioSummary):
     result_snapshot: MultiPeriodSolveResponse | None = None
+
+
+SensitivityParameter = Literal["demand", "capacity", "production_cost", "inventory_cost"]
+SensitivitySolveCategory = Literal[
+    "optimal", "infeasible", "unbounded", "timeout", "solver_error", "unknown"
+]
+
+
+class SensitivitySweepRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=1)
+    mapping: MultiPeriodColumnMapping
+    integer_production: bool = False
+    allow_backlogging: bool = False
+    capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "auto"
+    parameter: SensitivityParameter
+    min_multiplier: float = Field(default=0.7, gt=0.0, le=10.0)
+    max_multiplier: float = Field(default=1.3, gt=0.0, le=10.0)
+    num_points: int = Field(default=9, ge=3, le=25)
+
+    @field_validator("min_multiplier", "max_multiplier")
+    @classmethod
+    def _validate_finite_bound(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("Sensitivity multiplier bounds must be finite numbers.")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_bounds_order(self) -> SensitivitySweepRequest:
+        if self.min_multiplier >= self.max_multiplier:
+            raise ValueError("min_multiplier must be strictly less than max_multiplier.")
+        return self
+
+
+class SensitivityPointResult(BaseModel):
+    multiplier: float
+    parameter: SensitivityParameter
+    is_baseline: bool = False
+    in_requested_grid: bool = True
+    solver_status: str
+    status_category: SensitivitySolveCategory
+    is_optimal: bool
+    constraints_feasible: bool
+    is_feasible_optimal: bool
+    objective_value: float | None = None
+    objective_diff: float | None = None
+    objective_pct_change: float | None = None
+    plan_shift_pct: float | None = None
+    setup_changes: int | None = None
+    peak_utilization_pct: float | None = None
+    total_production: float | None = None
+    total_demand: float | None = None
+    total_ending_inventory: float | None = None
+    max_constraint_violation: float | None = None
+    runtime_seconds: float
+    production_decisions: list[dict[str, Any]] = []
+    error_message: str | None = None
+
+
+class SensitivityTransition(BaseModel):
+    from_multiplier: float
+    to_multiplier: float
+    from_status: str
+    to_status: str
+    description: str
+
+
+class SensitivityGridConfig(BaseModel):
+    min_multiplier: float
+    max_multiplier: float
+    requested_points: int
+    grid_multipliers: list[float]
+    baseline_included_in_grid: bool
+    total_solver_runs: int
+    per_solve_time_limit_seconds: float
+    total_budget_seconds: float
+    budget_exhausted: bool = False
+
+
+class SensitivitySummary(BaseModel):
+    total_grid_points: int
+    feasible_optimal_count: int
+    infeasible_count: int
+    incomplete_or_error_count: int
+    feasibility_rate_pct: float
+    objective_sense: str
+    baseline_objective: float | None = None
+    best_feasible_objective: float | None = None
+    worst_case_feasible_objective: float | None = None
+    objective_range: float | None = None
+    max_plan_shift_pct: float | None = None
+    first_infeasible_multiplier: float | None = None
+    observed_transitions: list[SensitivityTransition] = []
+    total_runtime_seconds: float
+    empirical_disclosure: str
+
+
+class SensitivitySweepResponse(BaseModel):
+    parameter: SensitivityParameter
+    dataset_id: str
+    is_milp: bool
+    baseline: SensitivityPointResult
+    grid_config: SensitivityGridConfig
+    points: list[SensitivityPointResult]
+    summary: SensitivitySummary
+
+
+TradeoffCriterion = Literal[
+    "peak_utilization",
+    "cumulative_inventory",
+    "production_smoothing",
+]
+TradeoffToleranceMode = Literal["relative_pct", "absolute"]
+
+
+class TradeoffExploreRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=1)
+    mapping: MultiPeriodColumnMapping
+    integer_production: bool = False
+    allow_backlogging: bool = False
+    capacity_scope: Literal["auto", "per_product", "aggregate_period"] = "auto"
+    criterion: TradeoffCriterion
+    max_relative_tolerance_pct: float | None = Field(default=10.0, gt=0.0, le=50.0)
+    absolute_tolerance: float | None = Field(default=None, gt=0.0, le=1e6)
+    num_points: int = Field(default=6, ge=2, le=12)
+
+    @field_validator("max_relative_tolerance_pct", "absolute_tolerance")
+    @classmethod
+    def _validate_finite_tolerance(cls, v: float | None) -> float | None:
+        if v is not None and not math.isfinite(v):
+            raise ValueError("Trade-off tolerance must be a finite number.")
+        return v
+
+
+class TradeoffCandidateResult(BaseModel):
+    candidate_id: str
+    index: int
+    is_baseline: bool = False
+    tolerance_value: float
+    objective_budget: float
+    solver_status: str
+    status_category: SensitivitySolveCategory
+    is_optimal: bool
+    original_constraints_feasible: bool
+    objective_budget_satisfied: bool
+    is_verified_feasible: bool
+    objective_value: float | None = None
+    objective_diff: float | None = None
+    objective_pct_change: float | None = None
+    criterion_value: float | None = None
+    criterion_diff: float | None = None
+    plan_shift_pct: float | None = None
+    peak_utilization_pct: float | None = None
+    total_production: float | None = None
+    total_demand: float | None = None
+    total_ending_inventory: float | None = None
+    cost_breakdown: dict[str, float] | None = None
+    max_constraint_violation: float | None = None
+    runtime_seconds: float
+    is_duplicate: bool = False
+    duplicate_of_candidate_id: str | None = None
+    production_schedule: list[dict[str, Any]] = []
+    resource_utilization: list[dict[str, Any]] = []
+    error_message: str | None = None
+
+
+class TradeoffSummary(BaseModel):
+    criterion: TradeoffCriterion
+    criterion_label: str
+    criterion_unit: str
+    tolerance_mode: TradeoffToleranceMode
+    objective_sense: str
+    baseline_objective: float
+    baseline_criterion_value: float
+    total_requested_points: int
+    verified_feasible_count: int
+    distinct_feasible_count: int
+    duplicate_count: int
+    incomplete_or_error_count: int
+    best_criterion_value: float | None = None
+    criterion_improvement: float | None = None
+    budget_exhausted: bool = False
+    total_runtime_seconds: float
+    per_solve_time_limit_seconds: float
+    total_budget_seconds: float
+    disclosure: str
+
+
+class TradeoffExploreResponse(BaseModel):
+    dataset_id: str
+    criterion: TradeoffCriterion
+    is_milp: bool
+    baseline: TradeoffCandidateResult
+    candidates: list[TradeoffCandidateResult]
+    summary: TradeoffSummary

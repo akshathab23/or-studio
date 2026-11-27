@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 import time
 from typing import Any
@@ -9,10 +10,64 @@ import pulp
 
 from app.schemas import (
     MathFormulationSection,
+    MultiPeriodColumnMapping,
     MultiPeriodSolveRequest,
     MultiPeriodSolveResponse,
 )
 from app.services.dataset_service import get_dataset, validate_multi_period_mapping
+
+
+@dataclass(frozen=True)
+class PreparedMultiPeriodData:
+    products: list[str]
+    periods: list[str]
+    resources: list[str]
+    has_prod_cost: bool
+    has_inv_cost: bool
+    has_capacity: bool
+    has_proc_time: bool
+    has_resource: bool
+    has_init_inv: bool
+    has_setup_cost: bool
+    has_setup_time: bool
+    has_setup: bool
+    base_demand: dict[tuple[str, str], float]
+    base_prod_cost: dict[tuple[str, str], float]
+    base_inv_cost: dict[tuple[str, str], float]
+    proc_time: dict[tuple[str, str], float]
+    setup_cost: dict[tuple[str, str], float]
+    setup_time: dict[tuple[str, str], float]
+    init_inv: dict[str, float]
+    base_cap_period: dict[str, float]
+    base_cap_prod_period: dict[tuple[str, str], float]
+    base_cap_resource_period: dict[tuple[str, str], float]
+    prod_period_resource: dict[tuple[str, str], str]
+    use_per_product_cap: bool
+    repeated_pairs: int
+    integer_production: bool
+    allow_backlogging: bool
+    capacity_scope: str
+
+
+@dataclass
+class BuiltMultiPeriodModel:
+    prob: pulp.LpProblem
+    x: dict[tuple[str, str], pulp.LpVariable]
+    I_var: dict[tuple[str, str], pulp.LpVariable]
+    y: dict[tuple[str, str], pulp.LpVariable]
+    original_obj_expr: pulp.LpAffineExpression
+    original_constraints: dict[str, pulp.LpConstraint]
+    capacity_constraints_meta: list[dict[str, Any]]
+    capacity_lhs_exprs: list[tuple[dict[str, Any], pulp.LpAffineExpression]]
+    demand: dict[tuple[str, str], float]
+    prod_cost: dict[tuple[str, str], float]
+    inv_cost: dict[tuple[str, str], float]
+    uses_cost_objective: bool
+    obj_desc: str
+    demand_mult: float
+    capacity_mult: float
+    prod_cost_mult: float
+    inv_cost_mult: float
 
 
 def _sort_periods(values: list[Any]) -> list[str]:
@@ -45,16 +100,23 @@ def _sort_periods(values: list[Any]) -> list[str]:
     return unique
 
 
-def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse:
-    t0 = time.perf_counter()
-    validation = validate_multi_period_mapping(req.dataset_id, req.mapping)
+def prepare_multi_period_data(
+    dataset_id: str,
+    mapping: MultiPeriodColumnMapping,
+    *,
+    sheet_name: str | None = None,
+    integer_production: bool = False,
+    allow_backlogging: bool = False,
+    capacity_scope: str = "auto",
+) -> PreparedMultiPeriodData:
+    validation = validate_multi_period_mapping(dataset_id, mapping, sheet_name=sheet_name)
     if not validation.valid:
         err_msgs = "; ".join(i.message for i in validation.issues if i.severity == "error")
         raise ValueError(f"Mapping validation failed: {err_msgs}")
 
-    stored = get_dataset(req.dataset_id)
+    stored = get_dataset(dataset_id, sheet_name=sheet_name)
     df = stored.df.copy()
-    m = req.mapping
+    m = mapping
 
     # Extract sets
     products: list[str] = list(dict.fromkeys(str(v) for v in df[m.product].tolist()))
@@ -71,7 +133,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
     has_setup = has_setup_cost or has_setup_time
 
     # Build parameter dictionaries from actual rows (track counts for clean aggregation)
-    demand: dict[tuple[str, str], float] = {(p, t): 0.0 for p in products for t in periods}
+    base_demand: dict[tuple[str, str], float] = {(p, t): 0.0 for p in products for t in periods}
     pair_row_counts: dict[tuple[str, str], int] = {}
     prod_cost_acc: dict[tuple[str, str], list[float]] = {}
     inv_cost_acc: dict[tuple[str, str], list[float]] = {}
@@ -93,7 +155,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
         t = str(row[m.period])
         pair_row_counts[(p, t)] = pair_row_counts.get((p, t), 0) + 1
         d_val = float(pd.to_numeric(row[m.demand]))
-        demand[(p, t)] = demand.get((p, t), 0.0) + d_val
+        base_demand[(p, t)] = base_demand.get((p, t), 0.0) + d_val
 
         if has_prod_cost and m.production_cost:
             prod_cost_acc.setdefault((p, t), []).append(float(pd.to_numeric(row[m.production_cost])))
@@ -121,36 +183,101 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 cap_period_acc.setdefault(t, []).append(c_val)
                 cap_prod_period_acc.setdefault((p, t), []).append(c_val)
 
-    demand_mult = float(req.demand_multiplier)
-    capacity_mult = float(req.capacity_multiplier)
-    prod_cost_mult = float(req.production_cost_multiplier)
-
-    demand = {k: v * demand_mult for k, v in demand.items()}
-    prod_cost = {k: (sum(v) / len(v)) * prod_cost_mult for k, v in prod_cost_acc.items()}
-    inv_cost = {k: sum(v) / len(v) for k, v in inv_cost_acc.items()}
+    base_prod_cost = {k: sum(v) / len(v) for k, v in prod_cost_acc.items()}
+    base_inv_cost = {k: sum(v) / len(v) for k, v in inv_cost_acc.items()}
     proc_time = {k: sum(v) / len(v) for k, v in proc_time_acc.items()}
     setup_cost = {k: sum(v) / len(v) for k, v in setup_cost_acc.items()}
     setup_time = {k: sum(v) / len(v) for k, v in setup_time_acc.items()}
-    cap_period = {k: (sum(v) / len(v)) * capacity_mult for k, v in cap_period_acc.items()}
-    cap_prod_period = {k: (sum(v) / len(v)) * capacity_mult for k, v in cap_prod_period_acc.items()}
-    cap_resource_period = {k: (sum(v) / len(v)) * capacity_mult for k, v in cap_resource_period_acc.items()}
+    base_cap_period = {k: sum(v) / len(v) for k, v in cap_period_acc.items()}
+    base_cap_prod_period = {k: sum(v) / len(v) for k, v in cap_prod_period_acc.items()}
+    base_cap_resource_period = {k: sum(v) / len(v) for k, v in cap_resource_period_acc.items()}
     repeated_pairs = sum(1 for cnt in pair_row_counts.values() if cnt > 1)
 
     # Determine capacity scope when Resource is not mapped
     cap_varies_within_period = any(len(set(vals)) > 1 for vals in cap_period_acc.values())
     use_per_product_cap = False
     if has_capacity and not (has_resource and resources):
-        if req.capacity_scope == "per_product":
+        if capacity_scope == "per_product":
             use_per_product_cap = True
-        elif req.capacity_scope == "aggregate_period":
+        elif capacity_scope == "aggregate_period":
             use_per_product_cap = False
         else:
             use_per_product_cap = cap_varies_within_period
 
+    return PreparedMultiPeriodData(
+        products=products,
+        periods=periods,
+        resources=resources,
+        has_prod_cost=has_prod_cost,
+        has_inv_cost=has_inv_cost,
+        has_capacity=has_capacity,
+        has_proc_time=has_proc_time,
+        has_resource=has_resource,
+        has_init_inv=has_init_inv,
+        has_setup_cost=has_setup_cost,
+        has_setup_time=has_setup_time,
+        has_setup=has_setup,
+        base_demand=base_demand,
+        base_prod_cost=base_prod_cost,
+        base_inv_cost=base_inv_cost,
+        proc_time=proc_time,
+        setup_cost=setup_cost,
+        setup_time=setup_time,
+        init_inv=init_inv,
+        base_cap_period=base_cap_period,
+        base_cap_prod_period=base_cap_prod_period,
+        base_cap_resource_period=base_cap_resource_period,
+        prod_period_resource=prod_period_resource,
+        use_per_product_cap=use_per_product_cap,
+        repeated_pairs=repeated_pairs,
+        integer_production=integer_production,
+        allow_backlogging=allow_backlogging,
+        capacity_scope=capacity_scope,
+    )
+
+
+def build_multi_period_pulp_model(
+    prepared: PreparedMultiPeriodData,
+    *,
+    demand_multiplier: float = 1.0,
+    capacity_multiplier: float = 1.0,
+    production_cost_multiplier: float = 1.0,
+    inventory_cost_multiplier: float = 1.0,
+) -> BuiltMultiPeriodModel:
+    products = prepared.products
+    periods = prepared.periods
+    resources = prepared.resources
+    has_prod_cost = prepared.has_prod_cost
+    has_inv_cost = prepared.has_inv_cost
+    has_capacity = prepared.has_capacity
+    has_proc_time = prepared.has_proc_time
+    has_resource = prepared.has_resource
+    has_setup_cost = prepared.has_setup_cost
+    has_setup_time = prepared.has_setup_time
+    has_setup = prepared.has_setup
+    proc_time = prepared.proc_time
+    setup_cost = prepared.setup_cost
+    setup_time = prepared.setup_time
+    init_inv = prepared.init_inv
+    prod_period_resource = prepared.prod_period_resource
+    use_per_product_cap = prepared.use_per_product_cap
+
+    demand_mult = float(demand_multiplier)
+    capacity_mult = float(capacity_multiplier)
+    prod_cost_mult = float(production_cost_multiplier)
+    inv_cost_mult = float(inventory_cost_multiplier)
+
+    demand = {k: v * demand_mult for k, v in prepared.base_demand.items()}
+    prod_cost = {k: v * prod_cost_mult for k, v in prepared.base_prod_cost.items()}
+    inv_cost = {k: v * inv_cost_mult for k, v in prepared.base_inv_cost.items()}
+    cap_period = {k: v * capacity_mult for k, v in prepared.base_cap_period.items()}
+    cap_prod_period = {k: v * capacity_mult for k, v in prepared.base_cap_prod_period.items()}
+    cap_resource_period = {k: v * capacity_mult for k, v in prepared.base_cap_resource_period.items()}
+
     # Construct PuLP model
     prob = pulp.LpProblem("OR_Studio_Multi_Period_Production_Planning", pulp.LpMinimize)
 
-    x_cat = pulp.LpInteger if req.integer_production else pulp.LpContinuous
+    x_cat = pulp.LpInteger if prepared.integer_production else pulp.LpContinuous
     x: dict[tuple[str, str], pulp.LpVariable] = {
         (p, t): pulp.LpVariable(f"x_{i}_{j}", lowBound=0, cat=x_cat)
         for i, p in enumerate(products)
@@ -188,7 +315,8 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                 obj_terms.append(x[(p, t)] + I_var[(p, t)])
         obj_desc = "Minimize total production and ending inventory (no cost columns mapped)"
 
-    prob += pulp.lpSum(obj_terms), "Total_Objective"
+    original_obj_expr = pulp.lpSum(obj_terms)
+    prob += original_obj_expr, "Total_Objective"
 
     # Constraints: 1. Inventory Balance
     for p in products:
@@ -201,6 +329,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
 
     # Constraints: 2. Capacity
     capacity_constraints_meta: list[dict[str, Any]] = []
+    capacity_lhs_exprs: list[tuple[dict[str, Any], pulp.LpAffineExpression]] = []
     if has_capacity:
         if has_resource and resources:
             for r in resources:
@@ -216,10 +345,11 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                                 lhs_terms.append(setup_time[(p, t)] * y[(p, t)])
                     if lhs_terms:
                         cap_val = cap_resource_period[(r, t)]
-                        prob += pulp.lpSum(lhs_terms) <= cap_val, f"Cap_{r}_{t}"
-                        capacity_constraints_meta.append(
-                            {"resource": r, "period": t, "capacity": cap_val, "scope": "resource"}
-                        )
+                        lhs_expr = pulp.lpSum(lhs_terms)
+                        prob += lhs_expr <= cap_val, f"Cap_{r}_{t}"
+                        meta = {"resource": r, "period": t, "capacity": cap_val, "scope": "resource"}
+                        capacity_constraints_meta.append(meta)
+                        capacity_lhs_exprs.append((meta, lhs_expr))
         elif use_per_product_cap:
             for p in products:
                 for t in periods:
@@ -230,10 +360,11 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                     if has_setup_time and (p, t) in setup_time and (p, t) in y:
                         lhs_terms.append(setup_time[(p, t)] * y[(p, t)])
                     cap_val = cap_prod_period[(p, t)]
-                    prob += pulp.lpSum(lhs_terms) <= cap_val, f"Cap_{p}_{t}"
-                    capacity_constraints_meta.append(
-                        {"resource": p, "period": t, "capacity": cap_val, "scope": "per_product"}
-                    )
+                    lhs_expr = pulp.lpSum(lhs_terms)
+                    prob += lhs_expr <= cap_val, f"Cap_{p}_{t}"
+                    meta = {"resource": p, "period": t, "capacity": cap_val, "scope": "per_product"}
+                    capacity_constraints_meta.append(meta)
+                    capacity_lhs_exprs.append((meta, lhs_expr))
         else:
             for t in periods:
                 if t not in cap_period:
@@ -245,10 +376,11 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
                     if has_setup_time and (p, t) in setup_time and (p, t) in y:
                         lhs_terms.append(setup_time[(p, t)] * y[(p, t)])
                 cap_val = cap_period[t]
-                prob += pulp.lpSum(lhs_terms) <= cap_val, f"Cap_{t}"
-                capacity_constraints_meta.append(
-                    {"resource": "Aggregate", "period": t, "capacity": cap_val, "scope": "aggregate"}
-                )
+                lhs_expr = pulp.lpSum(lhs_terms)
+                prob += lhs_expr <= cap_val, f"Cap_{t}"
+                meta = {"resource": "Aggregate", "period": t, "capacity": cap_val, "scope": "aggregate"}
+                capacity_constraints_meta.append(meta)
+                capacity_lhs_exprs.append((meta, lhs_expr))
 
     # Constraints: 3. Setup linking (exact remaining demand upper bound)
     if has_setup:
@@ -258,16 +390,68 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
             for t in periods:
                 prob += x[(p, t)] <= big_m * y[(p, t)], f"SetupLink_{p}_{t}"
 
-    # Solve
-    solver = pulp.PULP_CBC_CMD(msg=False)
-    prob.solve(solver)
-    solve_time = round(time.perf_counter() - t0, 4)
+    return BuiltMultiPeriodModel(
+        prob=prob,
+        x=x,
+        I_var=I_var,
+        y=y,
+        original_obj_expr=original_obj_expr,
+        original_constraints=dict(prob.constraints),
+        capacity_constraints_meta=capacity_constraints_meta,
+        capacity_lhs_exprs=capacity_lhs_exprs,
+        demand=demand,
+        prod_cost=prod_cost,
+        inv_cost=inv_cost,
+        uses_cost_objective=uses_cost_objective,
+        obj_desc=obj_desc,
+        demand_mult=demand_mult,
+        capacity_mult=capacity_mult,
+        prod_cost_mult=prod_cost_mult,
+        inv_cost_mult=inv_cost_mult,
+    )
+
+
+def extract_multi_period_response(
+    prepared: PreparedMultiPeriodData,
+    built: BuiltMultiPeriodModel,
+    *,
+    solve_time: float,
+) -> MultiPeriodSolveResponse:
+    products = prepared.products
+    periods = prepared.periods
+    resources = prepared.resources
+    has_prod_cost = prepared.has_prod_cost
+    has_inv_cost = prepared.has_inv_cost
+    has_capacity = prepared.has_capacity
+    has_proc_time = prepared.has_proc_time
+    has_resource = prepared.has_resource
+    has_init_inv = prepared.has_init_inv
+    has_setup_cost = prepared.has_setup_cost
+    has_setup_time = prepared.has_setup_time
+    proc_time = prepared.proc_time
+    setup_cost = prepared.setup_cost
+    setup_time = prepared.setup_time
+    init_inv = prepared.init_inv
+    prod_period_resource = prepared.prod_period_resource
+    use_per_product_cap = prepared.use_per_product_cap
+    repeated_pairs = prepared.repeated_pairs
+
+    prob = built.prob
+    x = built.x
+    I_var = built.I_var
+    y = built.y
+    demand = built.demand
+    prod_cost = built.prod_cost
+    inv_cost = built.inv_cost
+    uses_cost_objective = built.uses_cost_objective
+    obj_desc = built.obj_desc
+    capacity_constraints_meta = built.capacity_constraints_meta
 
     status_str = pulp.LpStatus.get(prob.status, "Unknown")
     is_optimal = status_str == "Optimal"
 
     var_count = len(prob.variables())
-    con_count = len(prob.constraints)
+    con_count = len(built.original_constraints)
 
     production_schedule: list[dict[str, Any]] = []
     period_summary: list[dict[str, Any]] = []
@@ -281,11 +465,12 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
     total_end_inv: float | None = None
 
     if is_optimal:
-        obj_value = round(float(pulp.value(prob.objective)), 6)
+        raw_obj = pulp.value(built.original_obj_expr)
+        obj_value = round(float(raw_obj), 6) if raw_obj is not None else 0.0
 
-        # Compute max constraint violation for solution verification
+        # Compute max constraint violation over the original model constraints
         max_v = 0.0
-        for cname, con in prob.constraints.items():
+        for cname, con in built.original_constraints.items():
             val = float(pulp.value(con))
             # PuLP constraint value is LHS - RHS
             if con.sense == pulp.LpConstraintEQ:
@@ -427,7 +612,7 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
         has_init_inv=has_init_inv,
         has_setup_cost=has_setup_cost,
         has_setup_time=has_setup_time,
-        integer_production=req.integer_production,
+        integer_production=prepared.integer_production,
         status_str=status_str,
         obj_value=obj_value,
         total_prod=total_prod,
@@ -478,12 +663,56 @@ def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse
         resource_utilization=resource_utilization,
         formulation=formulation,
         message=msg,
+        integer_production=prepared.integer_production,
+        allow_backlogging=prepared.allow_backlogging,
+        capacity_scope=prepared.capacity_scope,
+        demand_multiplier=built.demand_mult,
+        capacity_multiplier=built.capacity_mult,
+        production_cost_multiplier=built.prod_cost_mult,
+    )
+
+
+def solve_prepared_multi_period(
+    prepared: PreparedMultiPeriodData,
+    *,
+    demand_multiplier: float = 1.0,
+    capacity_multiplier: float = 1.0,
+    production_cost_multiplier: float = 1.0,
+    inventory_cost_multiplier: float = 1.0,
+    time_limit_seconds: float | None = None,
+) -> MultiPeriodSolveResponse:
+    t0 = time.perf_counter()
+    built = build_multi_period_pulp_model(
+        prepared,
+        demand_multiplier=demand_multiplier,
+        capacity_multiplier=capacity_multiplier,
+        production_cost_multiplier=production_cost_multiplier,
+        inventory_cost_multiplier=inventory_cost_multiplier,
+    )
+    solver_kwargs: dict[str, Any] = {"msg": False}
+    if time_limit_seconds is not None:
+        solver_kwargs["timeLimit"] = float(time_limit_seconds)
+    solver = pulp.PULP_CBC_CMD(**solver_kwargs)
+    built.prob.solve(solver)
+    solve_time = round(time.perf_counter() - t0, 4)
+    return extract_multi_period_response(prepared, built, solve_time=solve_time)
+
+
+def solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResponse:
+    prepared = prepare_multi_period_data(
+        req.dataset_id,
+        req.mapping,
+        sheet_name=req.sheet_name,
         integer_production=req.integer_production,
         allow_backlogging=req.allow_backlogging,
         capacity_scope=req.capacity_scope,
-        demand_multiplier=demand_mult,
-        capacity_multiplier=capacity_mult,
-        production_cost_multiplier=prod_cost_mult,
+    )
+    return solve_prepared_multi_period(
+        prepared,
+        demand_multiplier=req.demand_multiplier,
+        capacity_multiplier=req.capacity_multiplier,
+        production_cost_multiplier=req.production_cost_multiplier,
+        inventory_cost_multiplier=1.0,
     )
 
 

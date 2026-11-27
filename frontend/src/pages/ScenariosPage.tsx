@@ -11,27 +11,44 @@ import {
   FlaskConical,
   GitCompare,
   Layers,
+  Link2,
   Loader2,
   Play,
   RefreshCw,
   RotateCcw,
   Search,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import {
   deleteScenario,
+  fetchDatasets,
   fetchDatasetSummary,
   fetchScenarios,
+  reattachScenario,
   solveMultiPeriod,
   updateScenario,
+  uploadDataset,
 } from '../api/client';
 import { DecisionIntelligencePanel } from '../components/DecisionIntelligencePanel';
 import { PlotlyChart } from '../components/PlotlyChart';
 import { SaveScenarioModal } from '../components/SaveScenarioModal';
 import { useStudio } from '../context/StudioContext';
-import type { MultiPeriodSolveResponse, SavedScenarioDetail } from '../types/or';
+import type {
+  DatasetListItem,
+  MultiPeriodSolveResponse,
+  SavedScenarioDetail,
+} from '../types/or';
 import { buildScenarioComparison } from '../utils/scenarioComparison';
+import {
+  applyReattachedScenarioToList,
+  buildReattachWarningText,
+  canConfirmReattach,
+  formatReattachError,
+  isMissingDatasetError,
+  resolveDefaultSheetForDataset,
+} from '../utils/scenarioReattach';
 
 type TabId = 'library' | 'compare' | 'details';
 type StatusFilter = 'all' | 'optimal' | 'infeasible' | 'unsolved';
@@ -77,6 +94,33 @@ export const ScenariosPage: React.FC = () => {
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [updatingSnapshot, setUpdatingSnapshot] = useState(false);
   const [saveNewModalOpen, setSaveNewModalOpen] = useState(false);
+
+  // Re-attach missing dataset in details
+  const [datasetUnavailable, setDatasetUnavailable] = useState(false);
+  const [reattachOpen, setReattachOpen] = useState(false);
+  const [availableDatasets, setAvailableDatasets] = useState<DatasetListItem[]>([]);
+  const [loadingDatasets, setLoadingDatasets] = useState(false);
+  const [selectedReattachDatasetId, setSelectedReattachDatasetId] = useState('');
+  const [selectedReattachSheet, setSelectedReattachSheet] = useState<string | null>(null);
+  const [confirmedClearSnapshot, setConfirmedClearSnapshot] = useState(false);
+  const [reattaching, setReattaching] = useState(false);
+  const [reattachError, setReattachError] = useState<string | null>(null);
+  const [uploadingReplacement, setUploadingReplacement] = useState(false);
+
+  useEffect(() => {
+    if (!reattachOpen && confirmDeleteId === null) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (reattachOpen && !reattaching && !uploadingReplacement) {
+        setReattachOpen(false);
+      }
+      if (confirmDeleteId !== null && deletingId === null) {
+        setConfirmDeleteId(null);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [reattachOpen, reattaching, uploadingReplacement, confirmDeleteId, deletingId]);
 
   const loadScenarios = async () => {
     setLoading(true);
@@ -151,7 +195,93 @@ export const ScenariosPage: React.FC = () => {
     setActiveScenario(sc);
     setRerunResult(null);
     setRerunError(null);
+    setReattachOpen(false);
+    setReattachError(null);
+    setConfirmedClearSnapshot(false);
     setActiveTab('details');
+    if (!sc.dataset_id) {
+      setDatasetUnavailable(true);
+    } else {
+      setDatasetUnavailable(false);
+      void fetchDatasetSummary(sc.dataset_id).catch(() => {
+        setDatasetUnavailable(true);
+      });
+    }
+  };
+
+  const openReattachPanel = async () => {
+    setReattachOpen(true);
+    setReattachError(null);
+    setConfirmedClearSnapshot(false);
+    setLoadingDatasets(true);
+    try {
+      const list = await fetchDatasets();
+      setAvailableDatasets(list);
+      const preferred =
+        (dataset ? list.find((d) => d.dataset_id === dataset.dataset_id) : undefined) ?? list[0] ?? null;
+      setSelectedReattachDatasetId(preferred?.dataset_id ?? '');
+      setSelectedReattachSheet(
+        resolveDefaultSheetForDataset(preferred, activeScenario?.active_sheet)
+      );
+    } catch (err) {
+      setReattachError(formatReattachError(err));
+    } finally {
+      setLoadingDatasets(false);
+    }
+  };
+
+  const handleUploadReplacement = async (file: File) => {
+    setUploadingReplacement(true);
+    setReattachError(null);
+    try {
+      const uploaded = await uploadDataset(file);
+      const item: DatasetListItem = {
+        dataset_id: uploaded.dataset_id,
+        filename: uploaded.filename,
+        file_type: uploaded.file_type,
+        sheets: uploaded.sheets,
+        active_sheet: uploaded.active_sheet,
+        size_bytes: 0,
+        created_at: new Date().toISOString(),
+        last_accessed_at: new Date().toISOString(),
+      };
+      setAvailableDatasets((prev) => [item, ...prev.filter((d) => d.dataset_id !== item.dataset_id)]);
+      setSelectedReattachDatasetId(item.dataset_id);
+      setSelectedReattachSheet(
+        resolveDefaultSheetForDataset(item, activeScenario?.active_sheet)
+      );
+    } catch (err) {
+      setReattachError(formatReattachError(err));
+    } finally {
+      setUploadingReplacement(false);
+    }
+  };
+
+  const handleConfirmReattach = async () => {
+    if (!activeScenario || !selectedReattachDatasetId || !confirmedClearSnapshot) return;
+    setReattaching(true);
+    setReattachError(null);
+    try {
+      const updated = await reattachScenario(activeScenario.id, {
+        dataset_id: selectedReattachDatasetId,
+        active_sheet: selectedReattachSheet,
+        invalidate_snapshot: true,
+      });
+      setScenarios((prev) => applyReattachedScenarioToList(prev, updated));
+      setActiveScenario(updated);
+      setRerunResult(null);
+      setRerunError(null);
+      setDatasetUnavailable(false);
+      setReattachOpen(false);
+      setConfirmedClearSnapshot(false);
+      setNotice(
+        `Dataset re-attached to "${updated.dataset_name ?? updated.dataset_id}". Previous snapshot cleared — status is now Not Solved. Click Re-Run Solver to compute a new solution.`
+      );
+    } catch (err) {
+      setReattachError(formatReattachError(err));
+    } finally {
+      setReattaching(false);
+    }
   };
 
   const handleRestoreToWorkspace = async (
@@ -198,14 +328,19 @@ export const ScenariosPage: React.FC = () => {
           demand_multiplier: sc.input_config.demand_multiplier,
           capacity_multiplier: sc.input_config.capacity_multiplier,
           production_cost_multiplier: sc.input_config.production_cost_multiplier,
+          sheet_name: sc.active_sheet,
         }
       );
       setRerunResult(res);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Re-optimization failed.';
+      const missing = isMissingDatasetError(msg);
+      if (missing) {
+        setDatasetUnavailable(true);
+      }
       setRerunError(
-        msg.includes('404') || msg.toLowerCase().includes('not found')
-          ? 'The original uploaded dataset is no longer in active backend memory. Re-upload the dataset in Dataset Explorer to re-run this scenario.'
+        missing
+          ? 'The original dataset is unavailable in persistent storage. Re-attach a compatible replacement dataset below to re-run this scenario.'
           : msg
       );
     } finally {
@@ -343,13 +478,17 @@ export const ScenariosPage: React.FC = () => {
       </div>
 
       {notice && (
-        <div className="flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800">
+        <div
+          role="status"
+          className="flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800"
+        >
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>{notice}</span>
           </div>
           <button
             type="button"
+            aria-label="Dismiss notification"
             onClick={() => setNotice(null)}
             className="text-emerald-700 hover:text-emerald-900"
           >
@@ -359,7 +498,10 @@ export const ScenariosPage: React.FC = () => {
       )}
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800">
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800"
+        >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
           <span>{error}</span>
         </div>
@@ -1021,6 +1163,189 @@ export const ScenariosPage: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {(datasetUnavailable || isMissingDatasetError(rerunError)) && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-xs space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5 text-xs text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div>
+                    <div className="font-semibold">
+                      Original Dataset Unavailable ({activeScenario.dataset_name ?? 'Unlinked'})
+                    </div>
+                    <p className="mt-0.5 text-amber-800">
+                      This scenario&apos;s linked dataset could not be found. Re-attach a compatible
+                      dataset to re-run optimization; your saved mathematical configuration and
+                      mappings will be preserved, and the previous snapshot will be cleared (Not
+                      Solved).
+                    </p>
+                  </div>
+                </div>
+                {!reattachOpen && (
+                  <button
+                    type="button"
+                    onClick={() => void openReattachPanel()}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-700 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+                  >
+                    <Link2 className="h-3.5 w-3.5" />
+                    Re-attach Dataset
+                  </button>
+                )}
+              </div>
+
+              {reattachOpen && (() => {
+                const selectedItem =
+                  availableDatasets.find((d) => d.dataset_id === selectedReattachDatasetId) ?? null;
+                const confirmReady = canConfirmReattach({
+                  selectedDatasetId: selectedReattachDatasetId,
+                  selectedItem,
+                  selectedSheet: selectedReattachSheet,
+                  confirmedClearSnapshot,
+                  submitting: reattaching,
+                });
+
+                return (
+                  <div className="rounded-lg border border-amber-200 bg-white p-4 space-y-3 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-900">
+                        Select or Upload Replacement Dataset
+                      </span>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-slate-50 px-3 py-1 font-medium text-slate-700 hover:bg-slate-100">
+                        {uploadingReplacement ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="h-3.5 w-3.5" />
+                        )}
+                        {uploadingReplacement ? 'Uploading…' : 'Upload CSV / XLSX'}
+                        <input
+                          type="file"
+                          accept=".csv,.xlsx"
+                          className="hidden"
+                          disabled={uploadingReplacement}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void handleUploadReplacement(f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    {loadingDatasets ? (
+                      <div className="flex items-center gap-2 text-slate-500">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Loading available datasets…
+                      </div>
+                    ) : availableDatasets.length === 0 ? (
+                      <div className="text-slate-600">
+                        No persisted datasets are currently available. Upload a compatible CSV or
+                        XLSX file above.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block font-medium text-slate-700">
+                            Replacement Dataset
+                          </label>
+                          <select
+                            value={selectedReattachDatasetId}
+                            onChange={(e) => {
+                              const nextId = e.target.value;
+                              setSelectedReattachDatasetId(nextId);
+                              const nextItem =
+                                availableDatasets.find((d) => d.dataset_id === nextId) ?? null;
+                              setSelectedReattachSheet(
+                                resolveDefaultSheetForDataset(nextItem, activeScenario.active_sheet)
+                              );
+                              setReattachError(null);
+                            }}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
+                          >
+                            {availableDatasets.map((d) => (
+                              <option key={d.dataset_id} value={d.dataset_id}>
+                                {d.filename} ({d.file_type.toUpperCase()})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {selectedItem?.file_type === 'xlsx' && selectedItem.sheets.length > 0 && (
+                          <div>
+                            <label className="mb-1 block font-medium text-slate-700">
+                              Excel Sheet
+                            </label>
+                            <select
+                              value={selectedReattachSheet ?? ''}
+                              onChange={(e) => {
+                                setSelectedReattachSheet(e.target.value);
+                                setReattachError(null);
+                              }}
+                              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
+                            >
+                              {selectedItem.sheets.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                      {buildReattachWarningText(activeScenario.name)}
+                    </div>
+
+                    <label className="flex items-start gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={confirmedClearSnapshot}
+                        onChange={(e) => setConfirmedClearSnapshot(e.target.checked)}
+                        className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
+                      />
+                      <span>
+                        I confirm that re-attaching will clear the previous solution snapshot and
+                        set status to <strong>Not Solved</strong>.
+                      </span>
+                    </label>
+
+                    {reattachError && (
+                      <div
+                        role="alert"
+                        className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+                      >
+                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+                        <span>{reattachError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!confirmReady}
+                        onClick={() => void handleConfirmReattach()}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {reattaching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                        Confirm Re-attach Dataset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReattachOpen(false);
+                          setReattachError(null);
+                        }}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {rerunError && (
             <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800">

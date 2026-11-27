@@ -1,80 +1,123 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
+  AlertCircle,
   ArrowRight,
-  BookOpen,
+  Award,
   CheckCircle2,
   ChevronRight,
   Database,
   FileSpreadsheet,
   FlaskConical,
   GitBranch,
+  GitCompareArrows,
   History,
+  Layers,
   LineChart,
+  Loader2,
   Scale,
   Sigma,
+  SlidersHorizontal,
   Target,
   XCircle,
   Zap,
 } from 'lucide-react';
+import { uploadDataset } from '../api/client';
 import { useStudio } from '../context/StudioContext';
+import { getDashboardHeroState } from '../utils/workflowTransitions';
+
+const SAMPLE_DATASET_CSV = [
+  'product,period,demand,production_cost,inventory_cost,capacity,initial_inventory',
+  'WidgetA,2025-Q1,120,12,2,320,20',
+  'WidgetA,2025-Q2,150,12,2,320,20',
+  'WidgetA,2025-Q3,135,12,2,320,20',
+  'WidgetA,2025-Q4,160,12,2,320,20',
+  'WidgetB,2025-Q1,90,15,2.5,320,10',
+  'WidgetB,2025-Q2,110,15,2.5,320,10',
+  'WidgetB,2025-Q3,105,15,2.5,320,10',
+  'WidgetB,2025-Q4,125,15,2.5,320,10',
+].join('\n');
 
 // ── Workflow steps ────────────────────────────────────────────────────────────
-const WORKFLOW_STEPS = [
+export const DASHBOARD_WORKFLOW_STEPS = [
   {
     num: '01',
-    label: 'Define Problem',
-    desc: 'Choose the optimization type that matches your business question.',
-    icon: BookOpen,
-    to: '/',
-  },
-  {
-    num: '02',
     label: 'Prepare Data',
-    desc: 'Upload CSV or Excel and validate column schema.',
+    desc: 'Upload CSV or Excel, load the sample dataset, and inspect schema.',
     icon: Database,
     to: '/datasets',
   },
   {
-    num: '03',
-    label: 'Build Model',
-    desc: 'Map columns, configure variables, goals, and constraints.',
+    num: '02',
+    label: 'Configure Model',
+    desc: 'Map columns and configure variables, goals, or criteria.',
     icon: GitBranch,
     to: '/multi-period',
   },
   {
-    num: '04',
-    label: 'Optimize',
-    desc: 'Solve the exact LP/MILP or Goal Programming model with PuLP CBC.',
+    num: '03',
+    label: 'Solve & Validate',
+    desc: 'Run the PuLP CBC solver and verify constraint feasibility.',
     icon: Sigma,
     to: '/multi-period',
   },
   {
-    num: '05',
-    label: 'Explore Results',
-    desc: 'Inspect schedules, charts, and mathematical formulation.',
+    num: '04',
+    label: 'Understand Solution',
+    desc: 'Inspect Decision Intelligence, schedules, and formulation.',
     icon: LineChart,
     to: '/multi-period',
   },
   {
+    num: '05',
+    label: 'What-If & Sensitivity',
+    desc: 'Test parameter shifts and sweep stability once baseline is solved.',
+    icon: SlidersHorizontal,
+    to: '/sensitivity',
+  },
+  {
     num: '06',
-    label: 'Make Decision',
-    desc: 'Use What-If Lab to compare scenarios and confirm the optimal plan.',
-    icon: Zap,
-    to: '/what-if',
+    label: 'Explore Trade-offs',
+    desc: 'Generate bounded Pareto alternatives around your baseline.',
+    icon: GitCompareArrows,
+    to: '/trade-offs',
+  },
+  {
+    num: '07',
+    label: 'Compare & Rank',
+    desc: 'Rank eligible trade-off plans by operational preferences.',
+    icon: Award,
+    to: '/recommendations',
+  },
+  {
+    num: '08',
+    label: 'Save & Revisit',
+    desc: 'Store scenarios in the library and rerun them anytime.',
+    icon: Layers,
+    to: '/scenarios',
   },
 ];
 
-// ── Optimization module cards ─────────────────────────────────────────────────
-const MODULES = [
+// ── Core optimization & data modules ──────────────────────────────────────────
+export const DASHBOARD_MODULES = [
+  {
+    to: '/datasets',
+    icon: Database,
+    title: 'Dataset Explorer',
+    subtitle: 'Data Ingestion & Profiling',
+    description:
+      'Upload CSV or Excel datasets, inspect column types and distributions, import public datasets, or manage stored files.',
+    tags: ['CSV / Excel', 'Profiling', 'Persistence'],
+    cta: 'Explore Datasets',
+  },
   {
     to: '/multi-period',
     icon: Activity,
     title: 'Multi-Period Optimization',
     subtitle: 'Production Planning & Inventory',
     description:
-      'Solve capacitated multi-product, multi-period production planning with inventory balance constraints. Upload your dataset and let the solver minimise cost while meeting demand.',
+      'Solve capacitated multi-product, multi-period production planning with inventory balance constraints and Decision Intelligence.',
     tags: ['LP / MILP', 'Production', 'Inventory'],
     cta: 'Configure & Solve',
   },
@@ -84,7 +127,7 @@ const MODULES = [
     title: 'Goal Programming',
     subtitle: 'Competing Objectives',
     description:
-      'Balance multiple conflicting targets — profit, overtime, quality — with priority weights. Use weighted or preemptive lexicographic methods to find the least-deviation solution.',
+      'Balance multiple conflicting targets — profit, overtime, quality — with weighted or preemptive lexicographic priority methods.',
     tags: ['Weighted', 'Preemptive', 'Deviation'],
     cta: 'Build Goal Model',
   },
@@ -94,55 +137,52 @@ const MODULES = [
     title: 'MCDM',
     subtitle: 'Multi-Criteria Decision Making',
     description:
-      'Rank discrete alternatives across benefit and cost criteria using TOPSIS or Weighted Sum Model. Ideal for supplier selection, site ranking, and policy evaluation.',
+      'Rank discrete alternatives across benefit and cost criteria using TOPSIS or Weighted Sum Model for structured selection.',
     tags: ['TOPSIS', 'WSM', 'Ranking'],
     cta: 'Evaluate Alternatives',
   },
-  {
-    to: '/what-if',
-    icon: FlaskConical,
-    title: 'What-If Decision Lab',
-    subtitle: 'Scenario Experimentation',
-    description:
-      'Experiment with demand changes, capacity constraints, and cost shifts. Compare baseline results against alternative scenarios to make confident decisions.',
-    tags: ['Scenarios', 'Comparison', 'Sensitivity'],
-    cta: 'Open Lab',
-  },
 ];
 
-// ── Quick actions ─────────────────────────────────────────────────────────────
-const QUICK_ACTIONS = [
-  {
-    label: 'Upload Dataset',
-    desc: 'Start with your own CSV or Excel file.',
-    icon: FileSpreadsheet,
-    to: '/datasets',
-    primary: true,
-  },
-  {
-    label: 'Run Optimization',
-    desc: 'Jump straight to Multi-Period setup.',
-    icon: Activity,
-    to: '/multi-period',
-    primary: false,
-  },
-  {
-    label: 'Try Goal Programming',
-    desc: 'Balance competing business targets.',
-    icon: Target,
-    to: '/goal-programming',
-    primary: false,
-  },
+// ── Decision analysis, recommendations & library ──────────────────────────────
+export const DASHBOARD_ANALYSIS_LIBRARY = [
   {
     label: 'What-If Lab',
-    desc: 'Compare scenarios against your baseline.',
+    desc: 'Compare modified demand, capacity, or cost runs against your baseline.',
     icon: FlaskConical,
     to: '/what-if',
+    primary: false,
+  },
+  {
+    label: 'Sensitivity Analysis',
+    desc: 'Sweep parameters across ranges to inspect feasibility and stability.',
+    icon: SlidersHorizontal,
+    to: '/sensitivity',
+    primary: false,
+  },
+  {
+    label: 'Trade-off Explorer',
+    desc: 'Generate verified non-dominated alternatives within an objective budget.',
+    icon: GitCompareArrows,
+    to: '/trade-offs',
+    primary: false,
+  },
+  {
+    label: 'Decision Recommendation',
+    desc: 'Rank and compare eligible trade-off plans with preference weights.',
+    icon: Award,
+    to: '/recommendations',
+    primary: false,
+  },
+  {
+    label: 'Scenario Management',
+    desc: 'Save, inspect, rerun, and re-attach persistent scenarios.',
+    icon: Layers,
+    to: '/scenarios',
     primary: false,
   },
   {
     label: 'Solution History',
-    desc: 'Review past solver runs in this session.',
+    desc: 'Review past solver runs recorded in the current session.',
     icon: History,
     to: '/history',
     primary: false,
@@ -151,7 +191,55 @@ const QUICK_ACTIONS = [
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { dataset, history, mpSolution } = useStudio();
+  const {
+    dataset,
+    setDataset,
+    setPublicImport,
+    mpMapping,
+    setMpMapping,
+    mpCapacityScope,
+    mpIntegerProd,
+    mpSolution,
+    mpSolutionMappingSignature,
+    setMpSolution,
+    setRestoredScenario,
+    history,
+  } = useStudio();
+  const [loadingSample, setLoadingSample] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+
+  const heroState = getDashboardHeroState({
+    dataset,
+    mpMapping,
+    mpSolution,
+    mpIntegerProd,
+    mpCapacityScope,
+    mpSolutionMappingSignature,
+  });
+
+  const handleLoadSampleProblem = async () => {
+    if (loadingSample || dataset) return;
+    setLoadingSample(true);
+    setSampleError(null);
+    try {
+      const file = new File([SAMPLE_DATASET_CSV], 'sample_multi_period_demo.csv', {
+        type: 'text/csv',
+      });
+      const summary = await uploadDataset(file);
+      setDataset(summary);
+      setPublicImport(null);
+      setMpMapping(null);
+      setMpSolution(null);
+      setRestoredScenario(null);
+      navigate('/multi-period');
+    } catch (err) {
+      setSampleError(
+        err instanceof Error ? err.message : 'Failed to load built-in sample dataset.'
+      );
+    } finally {
+      setLoadingSample(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -172,25 +260,63 @@ export const DashboardPage: React.FC = () => {
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={() => navigate(dataset ? '/multi-period' : '/datasets')}
+              onClick={() => navigate(heroState.primaryCta.to)}
               className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-xs transition-all hover:bg-blue-50"
             >
               <Zap className="h-4 w-4" />
-              {dataset
-                ? mpSolution?.is_optimal
-                  ? 'View Results'
-                  : 'Configure Model'
-                : 'Get Started'}
+              {heroState.primaryCta.label}
             </button>
+            {heroState.showSampleProblemButton && (
+              <button
+                type="button"
+                disabled={loadingSample}
+                onClick={() => void handleLoadSampleProblem()}
+                className="inline-flex items-center gap-2 rounded-lg border border-white/40 bg-white/15 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-white/25 disabled:opacity-60"
+              >
+                {loadingSample ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4" />
+                )}
+                {loadingSample ? 'Loading Sample…' : 'Explore Sample Problem'}
+              </button>
+            )}
+            {heroState.showDatasetsAlternativeLink && (
+              <button
+                type="button"
+                onClick={() => navigate('/datasets')}
+                className="inline-flex items-center gap-2 rounded-lg border border-white/40 bg-white/15 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-white/25"
+              >
+                <Database className="h-4 w-4" />
+                Datasets &amp; Samples
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => navigate('/what-if')}
+              onClick={() => navigate(heroState.secondaryScenarioCta.to)}
               className="inline-flex items-center gap-2 rounded-lg border border-blue-400/50 bg-blue-500/20 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-blue-500/30"
             >
-              <FlaskConical className="h-4 w-4" />
-              Explore Scenarios
+              {heroState.baselineReady ? (
+                <FlaskConical className="h-4 w-4" />
+              ) : (
+                <Layers className="h-4 w-4" />
+              )}
+              {heroState.secondaryScenarioCta.label}
             </button>
           </div>
+          {!dataset && (
+            <p className="mt-2.5 text-[11px] text-blue-100/90">
+              “Explore Sample Problem” uploads a built-in demonstration dataset (
+              <code>sample_multi_period_demo.csv</code>: 2 products × 4 periods) through the
+              real solver pipeline.
+            </p>
+          )}
+          {sampleError && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+              <span>{sampleError}</span>
+            </div>
+          )}
         </div>
         {/* Decorative background element */}
         <div
@@ -241,11 +367,13 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── Optimization modules grid ─────────────────────────────────────── */}
+      {/* ── Optimization & data modules grid ──────────────────────────────── */}
       <section>
-        <h2 className="mb-4 text-base font-semibold text-slate-900">Optimization Modules</h2>
+        <h2 className="mb-4 text-base font-semibold text-slate-900">
+          Optimization &amp; Data Modules
+        </h2>
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {MODULES.map((mod) => {
+          {DASHBOARD_MODULES.map((mod) => {
             const Icon = mod.icon;
             return (
               <button
@@ -284,11 +412,13 @@ export const DashboardPage: React.FC = () => {
         </div>
       </section>
 
-      {/* ── Quick actions ─────────────────────────────────────────────────── */}
+      {/* ── Decision analysis & library ───────────────────────────────────── */}
       <section>
-        <h2 className="mb-3 text-base font-semibold text-slate-900">Quick Actions</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {QUICK_ACTIONS.map((action) => {
+        <h2 className="mb-3 text-base font-semibold text-slate-900">
+          Decision Analysis &amp; Library
+        </h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {DASHBOARD_ANALYSIS_LIBRARY.map((action) => {
             const Icon = action.icon;
             return (
               <button
@@ -324,15 +454,16 @@ export const DashboardPage: React.FC = () => {
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
         <h2 className="text-base font-semibold text-slate-900">Decision-Making Workflow</h2>
         <p className="mt-1 text-xs text-slate-500">
-          Every optimization run follows a transparent, verifiable pipeline — from raw data to
-          confident decisions.
+          A transparent end-to-end decision-support pipeline. Stages 05–07 unlock once a verified
+          baseline solution is available; Goal Programming, MCDM, and Scenario Management can also
+          be opened directly.
         </p>
-        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {WORKFLOW_STEPS.map((step, idx) => {
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {DASHBOARD_WORKFLOW_STEPS.map((step) => {
             const Icon = step.icon;
             return (
               <button
-                key={step.label}
+                key={step.num}
                 type="button"
                 onClick={() => navigate(step.to)}
                 className="group relative flex flex-col rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 text-left transition-all hover:border-blue-300 hover:bg-blue-50/40"
@@ -343,9 +474,6 @@ export const DashboardPage: React.FC = () => {
                 </div>
                 <div className="mt-2 text-sm font-semibold text-slate-900">{step.label}</div>
                 <div className="mt-1 text-[11px] text-slate-500">{step.desc}</div>
-                {idx < WORKFLOW_STEPS.length - 1 && (
-                  <ChevronRight className="absolute -right-2 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-slate-300 lg:block" />
-                )}
               </button>
             );
           })}

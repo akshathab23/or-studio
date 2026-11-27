@@ -125,7 +125,7 @@ export const PublicDatasetImporter: React.FC = () => {
         false,
         publicImport.suggested_capacity_scope
       );
-      setMpSolution(sol);
+      setMpSolution(sol, publicImport.suggested_mapping);
       addHistoryItem({
         module: 'multi-period',
         title: `Multi-Period (${publicImport.catalog_entry.name})`,

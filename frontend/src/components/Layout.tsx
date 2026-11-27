@@ -1,147 +1,350 @@
-import React, { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   Activity,
+  Award,
   Database,
   FileSpreadsheet,
   FlaskConical,
+  GitCompareArrows,
   History,
   Layers,
   LayoutDashboard,
   Menu,
   Scale,
+  SlidersHorizontal,
   Target,
   X,
 } from 'lucide-react';
+import { checkBackendHealth, isRequestCancelledError } from '../api/client';
 import { useStudio } from '../context/StudioContext';
+import type { DatasetSummary } from '../types/or';
+import {
+  type BackendHealthStatus,
+  NAV_GROUPS,
+  type NavIconKey,
+  type NavReadinessInfo,
+  computeNavigationReadiness,
+  findActiveNavigationContext,
+  getBackendHealthPresentation,
+} from '../utils/navigation';
 
-const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/multi-period', label: 'Multi-Period Optimization', icon: Activity },
-  { to: '/goal-programming', label: 'Goal Programming', icon: Target },
-  { to: '/mcdm', label: 'MCDM', icon: Scale },
-  { to: '/what-if', label: 'What-If Lab', icon: FlaskConical },
-  { to: '/scenarios', label: 'Scenario Management', icon: Layers },
-  { to: '/datasets', label: 'Dataset Explorer', icon: Database },
-  { to: '/history', label: 'Solution History', icon: History },
-];
+const NAV_ICON_MAP: Record<NavIconKey, React.ComponentType<{ className?: string }>> = {
+  dashboard: LayoutDashboard,
+  datasets: Database,
+  'multi-period': Activity,
+  'goal-programming': Target,
+  mcdm: Scale,
+  'what-if': FlaskConical,
+  sensitivity: SlidersHorizontal,
+  'trade-offs': GitCompareArrows,
+  recommendations: Award,
+  scenarios: Layers,
+  history: History,
+};
 
-export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const { dataset } = useStudio();
-
-  const SidebarContent = (
-    <div className="flex h-full flex-col bg-white border-r border-slate-200">
-      <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white font-semibold text-sm shadow-xs">
-          OR
-        </div>
-        <div>
-          <div className="text-sm font-bold tracking-tight text-slate-900">OR Studio</div>
-          <div className="text-[11px] font-medium text-slate-500">Operations Research Solver</div>
-        </div>
-      </div>
-
-      <nav className="flex-1 space-y-1 px-3 py-4">
-        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            onClick={() => setMobileOpen(false)}
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-blue-50 text-blue-700'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`
-            }
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
-
-      <div className="border-t border-slate-200 p-4">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Active Dataset
-          </div>
-          {dataset ? (
-            <div className="mt-1.5 flex items-start gap-2">
-              <FileSpreadsheet className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-              <div className="min-w-0">
-                <div className="truncate text-xs font-semibold text-slate-900">
-                  {dataset.filename}
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  {dataset.row_count.toLocaleString()} rows · {dataset.column_count} cols
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-1 text-xs text-slate-500">No dataset loaded</div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function renderReadinessDot(readiness: NavReadinessInfo | undefined) {
+  if (!readiness || readiness.status === 'neutral') {
+    return null;
+  }
+  const dotColor =
+    readiness.status === 'ready'
+      ? 'bg-emerald-400'
+      : 'bg-slate-600';
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-900">
+    <span
+      className={`ml-auto w-2 h-2 rounded-full shrink-0 ${dotColor}`}
+      title={readiness.label}
+      aria-label={readiness.label}
+    />
+  );
+}
+
+export interface LayoutShellProps {
+  pathname: string;
+  healthStatus: BackendHealthStatus;
+  readinessByRoute: Record<string, NavReadinessInfo>;
+  dataset: DatasetSummary | null;
+  mobileOpen: boolean;
+  onOpenMobile: () => void;
+  onCloseMobile: () => void;
+  children: React.ReactNode;
+}
+
+export const LayoutShell: React.FC<LayoutShellProps> = ({
+  pathname,
+  healthStatus,
+  readinessByRoute,
+  dataset,
+  mobileOpen,
+  onOpenMobile,
+  onCloseMobile,
+  children,
+}) => {
+  const activeContext = findActiveNavigationContext(pathname);
+  const health = getBackendHealthPresentation(healthStatus);
+
+  const renderNavContent = (onItemClick?: () => void) => (
+    <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-auto" aria-label="Primary navigation">
+      {NAV_GROUPS.map((group) => (
+        <div key={group.id}>
+          <div className="px-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            {group.label}
+          </div>
+          <div className="space-y-1">
+            {group.items.map((item) => {
+              const Icon = NAV_ICON_MAP[item.iconKey];
+              const readiness = readinessByRoute[item.to];
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  onClick={onItemClick}
+                  title={item.description}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      isActive
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{item.label}</span>
+                        {item.subtitle && (
+                          <span
+                            className={`block truncate text-[10px] font-normal leading-tight ${
+                              isActive ? 'text-indigo-100' : 'text-slate-400'
+                            }`}
+                          >
+                            {item.subtitle}
+                          </span>
+                        )}
+                      </span>
+                      {renderReadinessDot(readiness)}
+                    </>
+                  )}
+                </NavLink>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
+
+  const renderDatasetFooter = () =>
+    dataset ? (
+      <div className="p-3 border-t border-slate-800 bg-slate-950/60">
+        <div className="flex items-center gap-2 text-xs text-slate-400 mb-1">
+          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className="uppercase tracking-wider font-semibold">Active Dataset</span>
+        </div>
+        <p className="text-xs font-medium text-slate-100 truncate" title={dataset.filename}>
+          {dataset.filename}
+        </p>
+        <p className="text-[11px] text-slate-400">
+          {dataset.row_count} rows × {dataset.column_count} cols
+        </p>
+      </div>
+    ) : null;
+
+  return (
+    <div className="min-h-screen flex bg-slate-50 text-slate-900">
       {/* Desktop Sidebar */}
-      <aside className="hidden w-64 shrink-0 lg:block">{SidebarContent}</aside>
+      <aside className="hidden md:flex md:flex-col md:w-64 md:fixed md:inset-y-0 bg-slate-900 text-slate-100 border-r border-slate-800">
+        <div className="flex items-center gap-2.5 px-5 py-4 border-b border-slate-800">
+          <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center font-bold text-white shadow-sm">
+            OR
+          </div>
+          <div>
+            <div className="font-semibold text-sm tracking-tight">OR Studio</div>
+            <div className="text-[11px] text-slate-400">Operations Research Workbench</div>
+          </div>
+        </div>
+
+        {renderNavContent()}
+        {renderDatasetFooter()}
+      </aside>
 
       {/* Mobile Drawer */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-50 flex lg:hidden">
-          <div
-            className="fixed inset-0 bg-slate-900/40"
-            onClick={() => setMobileOpen(false)}
-          />
-          <div className="relative z-10 w-64 max-w-[80vw]">{SidebarContent}</div>
-          <button
-            type="button"
-            aria-label="Close navigation"
-            onClick={() => setMobileOpen(false)}
-            className="relative z-10 ml-2 mt-3 flex h-9 w-9 items-center justify-center rounded-full bg-white text-slate-700 shadow-md"
-          >
-            <X className="h-5 w-5" />
-          </button>
+        <div className="fixed inset-0 z-40 md:hidden flex" role="dialog" aria-modal="true" aria-label="Navigation menu">
+          <div className="fixed inset-0 bg-slate-950/60" onClick={onCloseMobile} />
+          <aside className="relative w-72 max-w-[85vw] bg-slate-900 text-slate-100 flex flex-col z-50 h-full">
+            <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-md bg-indigo-500 flex items-center justify-center font-bold text-xs text-white">
+                  OR
+                </div>
+                <span className="font-semibold text-sm">OR Studio</span>
+              </div>
+              <button
+                type="button"
+                onClick={onCloseMobile}
+                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800"
+                aria-label="Close navigation menu"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {renderNavContent(onCloseMobile)}
+            {renderDatasetFooter()}
+          </aside>
         </div>
       )}
 
       {/* Main Content */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-xs lg:px-8">
-          <div className="flex items-center gap-3">
+      <div className="flex-1 md:pl-64 flex flex-col min-w-0">
+        <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-slate-200 px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
-              aria-label="Open navigation"
-              onClick={() => setMobileOpen(true)}
-              className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
+              onClick={onOpenMobile}
+              className="md:hidden p-1.5 rounded-md text-slate-600 hover:bg-slate-100 shrink-0"
+              aria-label="Open navigation menu"
             >
-              <Menu className="h-5 w-5" />
+              <Menu className="w-5 h-5" />
             </button>
-            <span className="text-sm font-semibold text-slate-900 lg:hidden">OR Studio</span>
-            <span className="hidden text-xs font-medium text-slate-500 lg:inline">
-              Interactive Mathematical Optimization & Decision Analysis
-            </span>
+
+            <div className="flex items-center gap-2 min-w-0">
+              {activeContext ? (
+                <>
+                  <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-xs font-medium shrink-0">
+                    {activeContext.group.label}
+                  </span>
+                  <span className="hidden sm:inline text-slate-300 text-xs">/</span>
+                  <span className="text-sm font-semibold text-slate-800 truncate">
+                    {activeContext.item.label}
+                  </span>
+                </>
+              ) : (
+                <span className="text-sm font-medium text-slate-600 truncate">
+                  Operations Research Decision-Support Platform
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              PuLP CBC Engine
-            </span>
+          <div
+            role="status"
+            aria-live="polite"
+            title={health.detail}
+            className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-medium shrink-0 ${health.badgeClass}`}
+          >
+            <span className={`w-2 h-2 rounded-full shrink-0 ${health.dotClass}`} />
+            <span>{health.label}</span>
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 lg:px-8 lg:py-8">
+        <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
           {children}
         </main>
       </div>
     </div>
+  );
+};
+
+export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  const {
+    dataset,
+    mpMapping,
+    mpCapacityScope,
+    mpIntegerProd,
+    mpSolution,
+    mpSolutionMappingSignature,
+    tradeoffResult,
+    tradeoffMeta,
+    gpSolution,
+    mcdmSolution,
+    history,
+  } = useStudio();
+
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [healthStatus, setHealthStatus] = useState<BackendHealthStatus>('checking');
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMobileOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+
+    setHealthStatus('checking');
+    checkBackendHealth({ signal: controller.signal })
+      .then(() => {
+        if (active && !controller.signal.aborted) {
+          setHealthStatus('connected');
+        }
+      })
+      .catch((err) => {
+        if (!active || controller.signal.aborted || isRequestCancelledError(err)) {
+          return;
+        }
+        setHealthStatus('unavailable');
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
+
+  const readinessByRoute = useMemo(
+    () =>
+      computeNavigationReadiness({
+        dataset,
+        mpMapping,
+        mpSolution,
+        mpIntegerProd,
+        mpCapacityScope,
+        mpSolutionMappingSignature,
+        tradeoffResult,
+        tradeoffMeta,
+        gpSolution,
+        mcdmSolution,
+        historyCount: history.length,
+      }),
+    [
+      dataset,
+      mpMapping,
+      mpSolution,
+      mpIntegerProd,
+      mpCapacityScope,
+      mpSolutionMappingSignature,
+      tradeoffResult,
+      tradeoffMeta,
+      gpSolution,
+      mcdmSolution,
+      history.length,
+    ]
+  );
+
+  return (
+    <LayoutShell
+      pathname={location.pathname}
+      healthStatus={healthStatus}
+      readinessByRoute={readinessByRoute}
+      dataset={dataset}
+      mobileOpen={mobileOpen}
+      onOpenMobile={() => setMobileOpen(true)}
+      onCloseMobile={() => setMobileOpen(false)}
+    >
+      {children}
+    </LayoutShell>
   );
 };

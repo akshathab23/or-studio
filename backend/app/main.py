@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from app.schemas import (
+    DatasetCleanupReport,
+    DatasetListItem,
     DatasetSummary,
     GoalProgrammingSolveRequest,
     GoalProgrammingSolveResponse,
@@ -21,17 +24,29 @@ from app.schemas import (
     PublicDatasetImportResponse,
     SavedScenarioDetail,
     ScenarioCreateRequest,
+    ScenarioReattachRequest,
     ScenarioUpdateRequest,
+    SensitivitySweepRequest,
+    SensitivitySweepResponse,
     SheetSelectRequest,
+    TradeoffExploreRequest,
+    TradeoffExploreResponse,
 )
 from app.services.dataset_service import (
+    DatasetCleanupDisabledError,
+    DatasetInUseError,
+    DatasetTooLargeError,
+    cleanup_unreferenced_datasets,
     delete_dataset,
     get_dataset_summary,
+    get_max_upload_bytes,
     get_preview_rows,
+    list_datasets,
     select_sheet,
     upload_dataset,
     validate_multi_period_mapping,
 )
+from app.services.lifecycle_lock import LifecycleLockError
 from app.services.goal_programming_solver import solve_goal_programming
 from app.services.mcdm_solver import solve_mcdm
 from app.services.multi_period_solver import solve_multi_period
@@ -41,8 +56,14 @@ from app.services.scenario_service import (
     delete_scenario,
     get_scenario,
     list_scenarios,
+    reattach_scenario_dataset,
     update_scenario,
 )
+from app.services.sensitivity_service import run_sensitivity_analysis
+from app.services.tradeoff_service import run_tradeoff_exploration
+
+_SENSITIVITY_SEMAPHORE = threading.BoundedSemaphore(2)
+_TRADEOFF_SEMAPHORE = threading.BoundedSemaphore(2)
 
 app = FastAPI(
     title="OR Studio API",
@@ -78,15 +99,40 @@ def health_check() -> dict[str, str]:
     return {"status": "ok", "service": "or-studio-backend"}
 
 
+@app.get("/api/datasets", response_model=list[DatasetListItem])
+def api_list_datasets() -> list[DatasetListItem]:
+    return list_datasets()
+
+
 @app.post("/api/datasets/upload", response_model=DatasetSummary)
-async def api_upload_dataset(file: UploadFile = File(...)) -> DatasetSummary:
+def api_upload_dataset(file: UploadFile = File(...)) -> DatasetSummary:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
-    content = await file.read()
+
+    max_bytes = get_max_upload_bytes()
+    chunk_size = 1024 * 1024
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while True:
+        chunk = file.file.read(chunk_size)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > max_bytes:
+            max_mb = max(1, round(max_bytes / (1024 * 1024)))
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded file exceeds the maximum allowed size of {max_mb} MB.",
+            )
+        chunks.append(chunk)
+
+    content = b"".join(chunks)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     try:
         return upload_dataset(file.filename, content)
+    except DatasetTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -121,11 +167,25 @@ def api_preview_dataset(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/datasets/cleanup", response_model=DatasetCleanupReport)
+def api_cleanup_datasets(dry_run: bool = Query(True)) -> DatasetCleanupReport:
+    try:
+        return cleanup_unreferenced_datasets(dry_run=dry_run)
+    except DatasetCleanupDisabledError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LifecycleLockError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @app.delete("/api/datasets/{dataset_id}")
 def api_delete_dataset(dataset_id: str) -> dict[str, str]:
     try:
         delete_dataset(dataset_id)
         return {"status": "deleted", "dataset_id": dataset_id}
+    except DatasetInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LifecycleLockError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -148,6 +208,40 @@ def api_solve_multi_period(req: MultiPeriodSolveRequest) -> MultiPeriodSolveResp
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/analyze/sensitivity", response_model=SensitivitySweepResponse)
+def api_analyze_sensitivity(req: SensitivitySweepRequest) -> SensitivitySweepResponse:
+    if not _SENSITIVITY_SEMAPHORE.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="Sensitivity analysis capacity is currently busy. Please retry shortly.",
+        )
+    try:
+        return run_sensitivity_analysis(req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _SENSITIVITY_SEMAPHORE.release()
+
+
+@app.post("/api/analyze/trade-offs", response_model=TradeoffExploreResponse)
+def api_analyze_tradeoffs(req: TradeoffExploreRequest) -> TradeoffExploreResponse:
+    if not _TRADEOFF_SEMAPHORE.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="Trade-off analysis capacity is currently busy. Please retry shortly.",
+        )
+    try:
+        return run_tradeoff_exploration(req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _TRADEOFF_SEMAPHORE.release()
 
 
 @app.post("/api/solve/goal-programming", response_model=GoalProgrammingSolveResponse)
@@ -220,6 +314,20 @@ def api_update_scenario(scenario_id: str, req: ScenarioUpdateRequest) -> SavedSc
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/scenarios/{scenario_id}/reattach", response_model=SavedScenarioDetail)
+def api_reattach_scenario(
+    scenario_id: str, req: ScenarioReattachRequest
+) -> SavedScenarioDetail:
+    try:
+        return reattach_scenario_dataset(scenario_id, req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LifecycleLockError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.delete("/api/scenarios/{scenario_id}")

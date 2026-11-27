@@ -23,6 +23,10 @@ export const DatasetUploader: React.FC<DatasetUploaderProps> = ({
   return (
     <div className="space-y-3">
       <div
+        role="button"
+        tabIndex={loading ? -1 : 0}
+        aria-label="Upload CSV or Excel dataset"
+        aria-disabled={loading}
         onDragOver={(e) => {
           e.preventDefault();
           setDragActive(true);
@@ -34,7 +38,15 @@ export const DatasetUploader: React.FC<DatasetUploaderProps> = ({
           handleFiles(e.dataTransfer.files);
         }}
         onClick={() => !loading && inputRef.current?.click()}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
+        onKeyDown={(e) => {
+          if (loading) return;
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
           dragActive
             ? 'border-blue-500 bg-blue-50/50'
             : 'border-slate-300 bg-white hover:border-blue-400 hover:bg-slate-50/60'

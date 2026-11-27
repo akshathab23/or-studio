@@ -328,3 +328,245 @@ export interface ScenarioUpdateRequest {
   input_config?: ScenarioInputConfig;
   result_snapshot?: MultiPeriodSolveResponse | null;
 }
+
+export interface DatasetListItem {
+  dataset_id: string;
+  filename: string;
+  file_type: 'csv' | 'xlsx';
+  sheets: string[];
+  active_sheet: string | null;
+  size_bytes: number;
+  created_at: string;
+  last_accessed_at: string;
+}
+
+export interface ScenarioReattachRequest {
+  dataset_id: string;
+  active_sheet?: string | null;
+  invalidate_snapshot: true;
+}
+
+export type SensitivityParameter =
+  | 'demand'
+  | 'capacity'
+  | 'production_cost'
+  | 'inventory_cost';
+
+export type SensitivitySolveCategory =
+  | 'optimal'
+  | 'infeasible'
+  | 'unbounded'
+  | 'timeout'
+  | 'solver_error'
+  | 'unknown';
+
+export interface SensitivitySweepRequest {
+  dataset_id: string;
+  mapping: MultiPeriodColumnMapping;
+  integer_production: boolean;
+  allow_backlogging: boolean;
+  capacity_scope: 'auto' | 'per_product' | 'aggregate_period';
+  parameter: SensitivityParameter;
+  min_multiplier: number;
+  max_multiplier: number;
+  num_points: number;
+}
+
+export interface SensitivityProductionDecision {
+  product: string;
+  period: string;
+  production: number;
+  ending_inventory: number;
+  setup?: number;
+}
+
+export interface SensitivityPointResult {
+  multiplier: number;
+  parameter: SensitivityParameter;
+  is_baseline: boolean;
+  in_requested_grid: boolean;
+  solver_status: string;
+  status_category: SensitivitySolveCategory;
+  is_optimal: boolean;
+  constraints_feasible: boolean;
+  is_feasible_optimal: boolean;
+  objective_value: number | null;
+  objective_diff: number | null;
+  objective_pct_change: number | null;
+  plan_shift_pct: number | null;
+  setup_changes: number | null;
+  peak_utilization_pct: number | null;
+  total_production: number | null;
+  total_demand: number | null;
+  total_ending_inventory: number | null;
+  max_constraint_violation: number | null;
+  runtime_seconds: number;
+  production_decisions: SensitivityProductionDecision[];
+  error_message: string | null;
+}
+
+export interface SensitivityTransition {
+  from_multiplier: number;
+  to_multiplier: number;
+  from_status: string;
+  to_status: string;
+  description: string;
+}
+
+export interface SensitivityGridConfig {
+  min_multiplier: number;
+  max_multiplier: number;
+  requested_points: number;
+  grid_multipliers: number[];
+  baseline_included_in_grid: boolean;
+  total_solver_runs: number;
+  per_solve_time_limit_seconds: number;
+  total_budget_seconds: number;
+  budget_exhausted: boolean;
+}
+
+export interface SensitivitySummary {
+  total_grid_points: number;
+  feasible_optimal_count: number;
+  infeasible_count: number;
+  incomplete_or_error_count: number;
+  feasibility_rate_pct: number;
+  objective_sense: string;
+  baseline_objective: number | null;
+  best_feasible_objective: number | null;
+  worst_case_feasible_objective: number | null;
+  objective_range: number | null;
+  max_plan_shift_pct: number | null;
+  first_infeasible_multiplier: number | null;
+  observed_transitions: SensitivityTransition[];
+  total_runtime_seconds: number;
+  empirical_disclosure: string;
+}
+
+export interface SensitivitySweepResponse {
+  parameter: SensitivityParameter;
+  dataset_id: string;
+  is_milp: boolean;
+  baseline: SensitivityPointResult;
+  grid_config: SensitivityGridConfig;
+  points: SensitivityPointResult[];
+  summary: SensitivitySummary;
+}
+
+export type TradeoffCriterion =
+  | 'peak_utilization'
+  | 'cumulative_inventory'
+  | 'production_smoothing';
+
+export type TradeoffToleranceMode = 'relative_pct' | 'absolute';
+
+export interface TradeoffExploreRequest {
+  dataset_id: string;
+  mapping: MultiPeriodColumnMapping;
+  integer_production: boolean;
+  allow_backlogging: boolean;
+  capacity_scope: 'auto' | 'per_product' | 'aggregate_period';
+  criterion: TradeoffCriterion;
+  max_relative_tolerance_pct: number | null;
+  absolute_tolerance: number | null;
+  num_points: number;
+}
+
+export interface TradeoffCandidateResult {
+  candidate_id: string;
+  index: number;
+  is_baseline: boolean;
+  tolerance_value: number;
+  objective_budget: number;
+  solver_status: string;
+  status_category: SensitivitySolveCategory;
+  is_optimal: boolean;
+  original_constraints_feasible: boolean;
+  objective_budget_satisfied: boolean;
+  is_verified_feasible: boolean;
+  objective_value: number | null;
+  objective_diff: number | null;
+  objective_pct_change: number | null;
+  criterion_value: number | null;
+  criterion_diff: number | null;
+  plan_shift_pct: number | null;
+  peak_utilization_pct: number | null;
+  total_production: number | null;
+  total_demand: number | null;
+  total_ending_inventory: number | null;
+  cost_breakdown: Record<string, number> | null;
+  max_constraint_violation: number | null;
+  runtime_seconds: number;
+  is_duplicate: boolean;
+  duplicate_of_candidate_id: string | null;
+  production_schedule: Record<string, unknown>[];
+  resource_utilization: Record<string, unknown>[];
+  error_message: string | null;
+}
+
+export interface TradeoffSummary {
+  criterion: TradeoffCriterion;
+  criterion_label: string;
+  criterion_unit: string;
+  tolerance_mode: TradeoffToleranceMode;
+  objective_sense: string;
+  baseline_objective: number;
+  baseline_criterion_value: number;
+  total_requested_points: number;
+  verified_feasible_count: number;
+  distinct_feasible_count: number;
+  duplicate_count: number;
+  incomplete_or_error_count: number;
+  best_criterion_value: number | null;
+  criterion_improvement: number | null;
+  budget_exhausted: boolean;
+  total_runtime_seconds: number;
+  per_solve_time_limit_seconds: number;
+  total_budget_seconds: number;
+  disclosure: string;
+}
+
+export interface TradeoffExploreResponse {
+  dataset_id: string;
+  criterion: TradeoffCriterion;
+  is_milp: boolean;
+  baseline: TradeoffCandidateResult;
+  candidates: TradeoffCandidateResult[];
+  summary: TradeoffSummary;
+}
+
+export type RecommendationCriterionId =
+  | 'primary_objective'
+  | 'peak_utilization'
+  | 'cumulative_inventory'
+  | 'production_smoothing';
+
+export type CriterionDirection = 'minimize' | 'maximize';
+
+export interface RecommendationCriterionConfig {
+  id: RecommendationCriterionId;
+  label: string;
+  unit: string;
+  description: string;
+  direction: CriterionDirection;
+  selected: boolean;
+  weight: number;
+  available: boolean;
+  disabledReason: string | null;
+}
+
+export interface TradeoffContextMeta {
+  datasetId: string;
+  mappingSignature: string | null;
+  integerProd: boolean;
+  capacityScope: 'auto' | 'per_product' | 'aggregate_period';
+}
+
+export interface SensitivityContextMeta {
+  datasetId: string;
+  mappingSignature: string | null;
+  integerProd: boolean;
+  capacityScope: 'auto' | 'per_product' | 'aggregate_period';
+  baselineObjective: number | null;
+  baselineStatus: string;
+}

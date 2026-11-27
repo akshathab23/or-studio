@@ -7,8 +7,13 @@ import type {
   MultiPeriodSolveResponse,
   PublicDatasetImportResponse,
   SavedScenarioDetail,
+  SensitivityContextMeta,
+  SensitivitySweepResponse,
   SolutionHistoryItem,
+  TradeoffContextMeta,
+  TradeoffExploreResponse,
 } from '../types/or';
+import { getMappingSignature } from '../utils/sensitivityAnalysis';
 
 interface StudioContextValue {
   dataset: DatasetSummary | null;
@@ -22,7 +27,23 @@ interface StudioContextValue {
   mpIntegerProd: boolean;
   setMpIntegerProd: (v: boolean) => void;
   mpSolution: MultiPeriodSolveResponse | null;
-  setMpSolution: (s: MultiPeriodSolveResponse | null) => void;
+  mpSolutionMappingSignature: string | null;
+  setMpSolution: (
+    s: MultiPeriodSolveResponse | null,
+    solvedMapping?: MultiPeriodColumnMapping | null
+  ) => void;
+  tradeoffResult: TradeoffExploreResponse | null;
+  tradeoffMeta: TradeoffContextMeta | null;
+  setTradeoffResult: (
+    res: TradeoffExploreResponse | null,
+    meta?: TradeoffContextMeta | null
+  ) => void;
+  sensitivityResult: SensitivitySweepResponse | null;
+  sensitivityMeta: SensitivityContextMeta | null;
+  setSensitivityResult: (
+    res: SensitivitySweepResponse | null,
+    meta?: SensitivityContextMeta | null
+  ) => void;
   restoredScenario: SavedScenarioDetail | null;
   setRestoredScenario: (s: SavedScenarioDetail | null) => void;
   gpSolution: GoalProgrammingSolveResponse | null;
@@ -46,7 +67,38 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     'auto' | 'per_product' | 'aggregate_period'
   >('auto');
   const [mpIntegerProd, setMpIntegerProd] = useState<boolean>(false);
-  const [mpSolution, setMpSolution] = useState<MultiPeriodSolveResponse | null>(null);
+  const [mpSolution, setMpSolutionState] = useState<MultiPeriodSolveResponse | null>(null);
+  const [mpSolutionMappingSignature, setMpSolutionMappingSignature] = useState<string | null>(null);
+  const [tradeoffResult, setTradeoffResultState] = useState<TradeoffExploreResponse | null>(null);
+  const [tradeoffMeta, setTradeoffMeta] = useState<TradeoffContextMeta | null>(null);
+  const [sensitivityResult, setSensitivityResultState] =
+    useState<SensitivitySweepResponse | null>(null);
+  const [sensitivityMeta, setSensitivityMeta] = useState<SensitivityContextMeta | null>(null);
+  const setMpSolution = (
+    s: MultiPeriodSolveResponse | null,
+    solvedMapping?: MultiPeriodColumnMapping | null
+  ) => {
+    setMpSolutionState(s);
+    setMpSolutionMappingSignature(s ? getMappingSignature(solvedMapping ?? mpMapping) : null);
+    setTradeoffResultState(null);
+    setTradeoffMeta(null);
+    setSensitivityResultState(null);
+    setSensitivityMeta(null);
+  };
+  const setTradeoffResult = (
+    res: TradeoffExploreResponse | null,
+    meta?: TradeoffContextMeta | null
+  ) => {
+    setTradeoffResultState(res);
+    setTradeoffMeta(res ? meta ?? null : null);
+  };
+  const setSensitivityResult = (
+    res: SensitivitySweepResponse | null,
+    meta?: SensitivityContextMeta | null
+  ) => {
+    setSensitivityResultState(res);
+    setSensitivityMeta(res ? meta ?? null : null);
+  };
   const [restoredScenario, setRestoredScenario] = useState<SavedScenarioDetail | null>(null);
   const [gpSolution, setGpSolution] = useState<GoalProgrammingSolveResponse | null>(null);
   const [mcdmSolution, setMcdmSolution] = useState<MCDMSolveResponse | null>(null);
@@ -99,7 +151,14 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         mpIntegerProd,
         setMpIntegerProd,
         mpSolution,
+        mpSolutionMappingSignature,
         setMpSolution,
+        tradeoffResult,
+        tradeoffMeta,
+        setTradeoffResult,
+        sensitivityResult,
+        sensitivityMeta,
+        setSensitivityResult,
         restoredScenario,
         setRestoredScenario,
         gpSolution,

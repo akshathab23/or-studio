@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -21,6 +21,10 @@ import { PlotlyChart } from '../components/PlotlyChart';
 import { SaveScenarioModal } from '../components/SaveScenarioModal';
 import { useStudio } from '../context/StudioContext';
 import type { MultiPeriodSolveResponse } from '../types/or';
+import {
+  checkWhatIfBaselineConsistency,
+  validateWhatIfMultipliers,
+} from '../utils/whatIfAnalysis';
 
 type BadgeTone = 'blue' | 'amber' | 'rose';
 
@@ -188,7 +192,14 @@ function DiffCard({
 // ── Main page ─────────────────────────────────────────────────────────────────
 export const WhatIfLabPage: React.FC = () => {
   const navigate = useNavigate();
-  const { dataset, mpMapping, mpSolution, mpCapacityScope, mpIntegerProd } = useStudio();
+  const {
+    dataset,
+    mpMapping,
+    mpSolution,
+    mpCapacityScope,
+    mpIntegerProd,
+    mpSolutionMappingSignature,
+  } = useStudio();
 
   const [selectedPreset, setSelectedPreset] = useState<string>('baseline');
   const [demandMult, setDemandMult] = useState(1.0);
@@ -201,24 +212,58 @@ export const WhatIfLabPage: React.FC = () => {
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
+  const baselineCheck = useMemo(
+    () =>
+      checkWhatIfBaselineConsistency({
+        dataset,
+        mpMapping,
+        mpSolution,
+        mpIntegerProd,
+        mpCapacityScope,
+        mpSolutionMappingSignature,
+      }),
+    [
+      dataset,
+      mpMapping,
+      mpSolution,
+      mpIntegerProd,
+      mpCapacityScope,
+      mpSolutionMappingSignature,
+    ]
+  );
+
+  useEffect(() => {
+    setScenarioResult(null);
+    setShowComparison(false);
+    setError(null);
+  }, [dataset?.dataset_id, mpSolution, mpSolutionMappingSignature]);
+
   const applyPreset = (preset: ScenarioPreset) => {
+    if (getPresetDisabledReason(preset) !== null) return;
     setSelectedPreset(preset.id);
     setDemandMult(preset.demandMultiplier);
-    setCapacityMult(preset.capacityMultiplier);
-    setCostMult(preset.costMultiplier);
+    setCapacityMult(hasCapacityMapped ? preset.capacityMultiplier : 1.0);
+    setCostMult(hasProdCostMapped ? preset.costMultiplier : 1.0);
     setScenarioResult(null);
     setShowComparison(false);
     setError(null);
   };
 
   const handleRunScenario = async () => {
-    if (!dataset || !mpMapping) return;
+    if (!baselineCheck.ready || !dataset || !mpMapping) {
+      setError(
+        baselineCheck.reason ?? 'Baseline model is not ready for What-If analysis.'
+      );
+      return;
+    }
 
-    const validDemand = Number.isFinite(demandMult) && demandMult > 0 && demandMult <= 10;
-    const validCap = Number.isFinite(capacityMult) && capacityMult > 0 && capacityMult <= 10;
-    const validCost = Number.isFinite(costMult) && costMult > 0 && costMult <= 10;
-    if (!validDemand || !validCap || !validCost) {
-      setError('All scenario multipliers must be finite positive numbers within supported bounds.');
+    const validationErr = validateWhatIfMultipliers({
+      demandMultiplier: demandMult,
+      capacityMultiplier: capacityMult,
+      costMultiplier: costMult,
+    });
+    if (validationErr) {
+      setError(validationErr);
       return;
     }
 
@@ -252,8 +297,20 @@ export const WhatIfLabPage: React.FC = () => {
     }
   };
 
-  const hasBaseline = Boolean(mpSolution?.is_optimal);
+  const hasBaseline = baselineCheck.ready;
   const hasScenario = Boolean(scenarioResult?.is_optimal);
+  const hasCapacityMapped = Boolean(mpMapping?.capacity);
+  const hasProdCostMapped = Boolean(mpMapping?.production_cost);
+
+  const getPresetDisabledReason = (preset: ScenarioPreset): string | null => {
+    if (preset.capacityMultiplier !== 1.0 && !hasCapacityMapped) {
+      return 'Capacity is not mapped in the baseline model.';
+    }
+    if (preset.costMultiplier !== 1.0 && !hasProdCostMapped) {
+      return 'Production Cost is not mapped in the baseline model.';
+    }
+    return null;
+  };
 
   const isMinimize = (mpSolution?.objective_sense ?? 'Minimize')
     .toLowerCase()
@@ -312,34 +369,47 @@ export const WhatIfLabPage: React.FC = () => {
         </p>
       </div>
 
-      {/* Prerequisite guard */}
+      {/* Prerequisite & Baseline Freshness guard */}
       {!hasBaseline && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-xs">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
-            <div>
-              <p className="text-sm font-semibold text-amber-900">No baseline solution available</p>
-              <p className="mt-1 text-xs text-amber-800">
-                Run a Multi-Period Optimization first to establish a baseline. The What-If Lab
-                compares modified scenarios against that baseline result.
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-amber-900">
+                {!mpSolution
+                  ? 'No baseline solution available'
+                  : 'Baseline model is outdated or inconsistent'}
               </p>
-              <div className="mt-3 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => navigate('/datasets')}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-50"
-                >
-                  <Database className="h-3.5 w-3.5" />
-                  Upload Dataset
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/multi-period')}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-                >
-                  <ArrowRight className="h-3.5 w-3.5" />
-                  Run Optimization
-                </button>
+              <p className="mt-1 text-xs text-amber-800">
+                {baselineCheck.reason}
+              </p>
+              <p className="mt-1.5 text-xs text-amber-700">
+                {!mpSolution
+                  ? 'Run a Multi-Period Optimization first to establish a baseline. The What-If Lab compares modified scenarios against that baseline result.'
+                  : 'The What-If Decision Lab requires a verified, fresh baseline corresponding to your current column mapping and solver configuration. Revalidate and solve your model in Multi-Period Optimization before running scenario experiments.'}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                {!dataset ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/datasets')}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                  >
+                    <Database className="h-3.5 w-3.5" />
+                    Upload Dataset
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/multi-period')}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700"
+                  >
+                    <ArrowRight className="h-3.5 w-3.5" />
+                    {!mpSolution
+                      ? 'Run Optimization'
+                      : 'Return to Multi-Period Optimization'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -349,9 +419,9 @@ export const WhatIfLabPage: React.FC = () => {
       {hasBaseline && (
         <>
           {/* Baseline summary strip */}
-          <div className="flex flex-wrap items-center gap-4 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-3">
+          <div className="flex flex-wrap items-center gap-4 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-3 shadow-xs">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-            <span className="text-xs font-semibold text-emerald-800">Baseline loaded</span>
+            <span className="text-xs font-semibold text-emerald-800">Verified baseline loaded</span>
             <span className="text-xs text-emerald-700">
               Objective ({mpSolution?.objective_sense}):{' '}
               {(baselineObj ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
@@ -375,32 +445,56 @@ export const WhatIfLabPage: React.FC = () => {
               <div className="space-y-2">
                 {PRESETS.map((preset) => {
                   const Icon = preset.icon;
-                  const active = selectedPreset === preset.id;
+                  const disabledReason = getPresetDisabledReason(preset);
+                  const disabled = disabledReason !== null;
+                  const active = !disabled && selectedPreset === preset.id;
                   return (
                     <button
                       key={preset.id}
                       type="button"
+                      disabled={disabled}
+                      title={disabledReason ?? undefined}
                       onClick={() => applyPreset(preset)}
                       className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-all ${
-                        active
+                        disabled
+                          ? 'cursor-not-allowed border-slate-200 bg-slate-50/70 opacity-65'
+                          : active
                           ? 'border-blue-300 bg-blue-50 shadow-xs'
                           : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                       }`}
                     >
                       <Icon
                         className={`mt-0.5 h-4 w-4 shrink-0 ${
-                          active ? 'text-blue-600' : 'text-slate-400'
+                          disabled
+                            ? 'text-slate-400'
+                            : active
+                            ? 'text-blue-600'
+                            : 'text-slate-400'
                         }`}
                       />
-                      <div>
-                        <div
-                          className={`text-xs font-semibold ${
-                            active ? 'text-blue-800' : 'text-slate-800'
-                          }`}
-                        >
-                          {preset.label}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`text-xs font-semibold ${
+                              disabled
+                                ? 'text-slate-600'
+                                : active
+                                ? 'text-blue-800'
+                                : 'text-slate-800'
+                            }`}
+                          >
+                            {preset.label}
+                          </span>
+                          {disabled && (
+                            <span className="shrink-0 rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-500">
+                              Not mapped
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-500">{preset.description}</div>
+                        {disabledReason && (
+                          <div className="mt-1 text-[11px] text-amber-700">{disabledReason}</div>
+                        )}
                       </div>
                     </button>
                   );
@@ -441,6 +535,8 @@ export const WhatIfLabPage: React.FC = () => {
                       max: 2.0,
                       step: 0.05,
                       tone: 'blue',
+                      disabled: false,
+                      disabledReason: null as string | null,
                     },
                     {
                       label: 'Capacity Multiplier',
@@ -450,6 +546,8 @@ export const WhatIfLabPage: React.FC = () => {
                       max: 1.5,
                       step: 0.05,
                       tone: 'amber',
+                      disabled: !hasCapacityMapped,
+                      disabledReason: 'Capacity is not mapped in the baseline model.',
                     },
                     {
                       label: 'Production Cost Multiplier',
@@ -459,22 +557,26 @@ export const WhatIfLabPage: React.FC = () => {
                       max: 2.0,
                       step: 0.05,
                       tone: 'rose',
+                      disabled: !hasProdCostMapped,
+                      disabledReason: 'Production Cost is not mapped in the baseline model.',
                     },
                   ] as const
-                ).map(({ label, value, setter, min, max, step, tone }) => (
-                  <div key={label}>
+                ).map(({ label, value, setter, min, max, step, tone, disabled, disabledReason }) => (
+                  <div key={label} className={disabled ? 'opacity-65' : ''}>
                     <div className="mb-1.5 flex items-center justify-between">
                       <label className="text-xs font-semibold text-slate-700">{label}</label>
                       <span
                         className={`rounded-md border px-2 py-0.5 font-mono text-xs font-bold ${
-                          Math.abs(value - 1.0) < 1e-6
+                          disabled
+                            ? 'border-slate-200 bg-slate-100 text-slate-500'
+                            : Math.abs(value - 1.0) < 1e-6
                             ? 'border-slate-200 text-slate-500'
                             : value > 1.0
                             ? BADGE_STYLES[tone].above
                             : BADGE_STYLES[tone].below
                         }`}
                       >
-                        ×{value.toFixed(2)}
+                        {disabled ? 'Not mapped' : `×${value.toFixed(2)}`}
                       </span>
                     </div>
                     <input
@@ -482,20 +584,25 @@ export const WhatIfLabPage: React.FC = () => {
                       min={min}
                       max={max}
                       step={step}
-                      value={value}
+                      disabled={disabled}
+                      value={disabled ? 1.0 : value}
                       onChange={(e) => {
                         setter(Number(e.target.value));
                         setSelectedPreset('custom');
                         setScenarioResult(null);
                         setShowComparison(false);
                       }}
-                      className="w-full accent-blue-600"
+                      className="w-full accent-blue-600 disabled:cursor-not-allowed"
                     />
-                    <div className="mt-0.5 flex justify-between text-[10px] text-slate-400">
-                      <span>×{min}</span>
-                      <span>×1.00 (baseline)</span>
-                      <span>×{max}</span>
-                    </div>
+                    {disabled && disabledReason ? (
+                      <div className="mt-1 text-[11px] text-amber-700">{disabledReason}</div>
+                    ) : (
+                      <div className="mt-0.5 flex justify-between text-[10px] text-slate-400">
+                        <span>×{min}</span>
+                        <span>×1.00 (baseline)</span>
+                        <span>×{max}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

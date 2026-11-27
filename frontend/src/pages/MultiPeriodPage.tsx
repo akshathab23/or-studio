@@ -26,6 +26,14 @@ import type {
   MultiPeriodColumnMapping,
   MultiPeriodSolveResponse,
 } from '../types/or';
+import {
+  CAPACITY_SCOPE_OPTIONS,
+  type CapacityScopeValue,
+  getCapacityScopeCue,
+  getMappingValidationFreshness,
+  getModelTypeCue,
+} from '../utils/modelingCues';
+import { getMappingSignature } from '../utils/sensitivityAnalysis';
 
 const OPTIONAL_FIELDS: { key: keyof MultiPeriodColumnMapping; label: string; hint: string }[] = [
   { key: 'production_cost', label: 'Production Cost', hint: 'Unit production cost' },
@@ -46,6 +54,7 @@ export const MultiPeriodPage: React.FC = () => {
     mpMapping,
     setMpMapping,
     mpCapacityScope,
+    setMpCapacityScope,
     mpIntegerProd: integerProd,
     setMpIntegerProd: setIntegerProd,
     mpSolution: baselineMpSolution,
@@ -70,6 +79,7 @@ export const MultiPeriodPage: React.FC = () => {
   }));
 
   const [validation, setValidation] = useState<MappingValidationResponse | null>(null);
+  const [validatedMappingSignature, setValidatedMappingSignature] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [solving, setSolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +105,7 @@ export const MultiPeriodPage: React.FC = () => {
 
   useEffect(() => {
     setValidation(null);
+    setValidatedMappingSignature(null);
     setError(null);
   }, [dataset?.dataset_id, dataset?.active_sheet]);
 
@@ -732,6 +743,22 @@ export const MultiPeriodPage: React.FC = () => {
     setup_time: mapping.setup_time || null,
   });
 
+  const currentMappingSignature = useMemo(
+    () => getMappingSignature(cleanMapping()),
+    [mapping]
+  );
+
+  const modelTypeCue = getModelTypeCue(
+    integerProd,
+    Boolean(mapping.setup_cost || mapping.setup_time)
+  );
+  const capacityScopeCue = getCapacityScopeCue(mpCapacityScope, mpSolution?.capacity_scope);
+  const validationFreshness = getMappingValidationFreshness({
+    currentSignature: currentMappingSignature,
+    validatedSignature: validatedMappingSignature,
+    validation,
+  });
+
   const handleValidate = async () => {
     if (!dataset) return;
     if (!mapping.product || !mapping.period || !mapping.demand) {
@@ -745,6 +772,7 @@ export const MultiPeriodPage: React.FC = () => {
       setMpMapping(cleaned);
       const res = await validateMultiPeriodMapping(dataset.dataset_id, cleaned);
       setValidation(res);
+      setValidatedMappingSignature(getMappingSignature(cleaned));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Validation failed.');
     } finally {
@@ -765,6 +793,7 @@ export const MultiPeriodPage: React.FC = () => {
       setMpMapping(cleaned);
       const val = await validateMultiPeriodMapping(dataset.dataset_id, cleaned);
       setValidation(val);
+      setValidatedMappingSignature(getMappingSignature(cleaned));
       if (!val.valid) {
         setError('Mapping validation failed. Resolve all errors before solving.');
         setSolving(false);
@@ -788,7 +817,7 @@ export const MultiPeriodPage: React.FC = () => {
       if (restoredScenario) {
         setRestoredSolveResult(sol);
       } else {
-        setMpSolution(sol);
+        setMpSolution(sol, cleaned);
       }
       setActiveTab('results');
       addHistoryItem({
@@ -923,15 +952,61 @@ export const MultiPeriodPage: React.FC = () => {
                 </p>
               </div>
 
-              <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={integerProd}
-                  onChange={(e) => setIntegerProd(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                />
-                Integer production quantities
-              </label>
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={integerProd}
+                      onChange={(e) => setIntegerProd(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                    />
+                    Integer production quantities
+                  </label>
+                  <span
+                    className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
+                      modelTypeCue.kind === 'MILP'
+                        ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                        : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    }`}
+                  >
+                    {modelTypeCue.badgeLabel}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 sm:text-right">{modelTypeCue.explanation}</p>
+              </div>
+            </div>
+
+            {/* Capacity Scope & Modeling Cue */}
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/70 p-3.5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <label
+                    htmlFor="mp-capacity-scope"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-600"
+                  >
+                    Capacity Scope
+                  </label>
+                  <p className="mt-0.5 text-xs text-slate-600">{capacityScopeCue.description}</p>
+                  {capacityScopeCue.resolvedNote && (
+                    <p className="mt-0.5 text-[11px] font-medium text-blue-700">
+                      {capacityScopeCue.resolvedNote}
+                    </p>
+                  )}
+                </div>
+                <select
+                  id="mp-capacity-scope"
+                  value={mpCapacityScope}
+                  onChange={(e) => setMpCapacityScope(e.target.value as CapacityScopeValue)}
+                  className="w-full shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-blue-500 focus:outline-none sm:w-48"
+                >
+                  {CAPACITY_SCOPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Required Fields */}
@@ -1050,14 +1125,54 @@ export const MultiPeriodPage: React.FC = () => {
                 <BookmarkPlus className="h-4 w-4 text-blue-600" />
                 Save Scenario
               </button>
+
+              {!restoredScenario &&
+                baselineMpSolution?.is_optimal &&
+                baselineMpSolution.constraints_feasible && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/sensitivity')}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Sensitivity Analysis
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/trade-offs')}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Trade-off Explorer
+                    </button>
+                  </>
+                )}
             </div>
 
             {error && (
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              <div
+                role="alert"
+                className="mt-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"
+              >
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
                 <span>{error}</span>
               </div>
             )}
+
+            {/* Mapping Validation Freshness */}
+            <div
+              className={`mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3.5 py-2 text-xs ${
+                validationFreshness.status === 'modified'
+                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                  : validationFreshness.status === 'validated'
+                    ? validation?.valid
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      : 'border-rose-200 bg-rose-50 text-rose-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+              }`}
+            >
+              <span className="font-semibold">{validationFreshness.label}</span>
+              <span>{validationFreshness.detail}</span>
+            </div>
 
             {validation && (
               <div className="mt-4 space-y-2">
@@ -1135,58 +1250,41 @@ export const MultiPeriodPage: React.FC = () => {
                     onFocusMapping={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
                   />
 
-                  {/* Status & KPIs */}
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-                      <div className="text-xs font-medium text-slate-500">Solver Status</div>
-                      <div className="mt-1 flex items-center gap-2">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                            mpSolution.is_optimal
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : 'bg-rose-50 text-rose-700'
-                          }`}
-                        >
-                          {mpSolution.status}
-                        </span>
-                        <span className="text-xs text-slate-500">
-                          {mpSolution.solve_time_seconds}s
-                        </span>
-                      </div>
+                  {/* Compact Solver Telemetry Strip (avoids repeating DecisionIntelligence KPIs) */}
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs shadow-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-500">Solver Status:</span>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 font-semibold ${
+                          mpSolution.is_optimal
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-rose-50 text-rose-700'
+                        }`}
+                      >
+                        {mpSolution.status}
+                      </span>
                     </div>
-
-                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-                      <div className="text-xs font-medium text-slate-500">
-                        Objective Value ({mpSolution.objective_sense})
-                      </div>
-                      <div className="mt-1 font-mono text-xl font-bold text-slate-900">
-                        {mpSolution.objective_value !== null
-                          ? mpSolution.objective_value.toLocaleString()
-                          : 'N/A'}
-                      </div>
+                    <div>
+                      <span className="font-medium text-slate-500">Runtime:</span>{' '}
+                      <span className="font-mono font-semibold text-slate-900">
+                        {mpSolution.solve_time_seconds}s
+                      </span>
                     </div>
-
-                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-                      <div className="text-xs font-medium text-slate-500">
-                        Total Production / Demand
-                      </div>
-                      <div className="mt-1 font-mono text-lg font-semibold text-slate-900">
-                        {mpSolution.total_production?.toLocaleString() ?? '—'} /{' '}
-                        {mpSolution.total_demand?.toLocaleString() ?? '—'}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-                      <div className="text-xs font-medium text-slate-500">
-                        Constraint Feasibility
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                    <div>
+                      <span className="font-medium text-slate-500">Constraint Verification:</span>{' '}
+                      <span className="font-semibold text-slate-900">
                         {mpSolution.is_optimal
                           ? mpSolution.constraints_feasible
                             ? `Verified (max viol: ${mpSolution.max_constraint_violation})`
                             : `Violation: ${mpSolution.max_constraint_violation}`
                           : 'Not Feasible'}
-                      </div>
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-medium text-slate-500">Model Size:</span>{' '}
+                      <span className="font-mono text-slate-800">
+                        {mpSolution.variable_count} vars · {mpSolution.constraint_count} constraints
+                      </span>
                     </div>
                   </div>
 

@@ -16,6 +16,7 @@ import { FormulationView } from '../components/FormulationView';
 import { PlotlyChart } from '../components/PlotlyChart';
 import { useStudio } from '../context/StudioContext';
 import type { GPGoal, GPHardConstraint, GPVariable } from '../types/or';
+import { renameGoalProgrammingVariable } from '../utils/goalProgramming';
 
 export const GoalProgrammingPage: React.FC = () => {
   const { gpSolution, setGpSolution, addHistoryItem } = useStudio();
@@ -49,14 +50,55 @@ export const GoalProgrammingPage: React.FC = () => {
 
   const [solving, setSolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draftNames, setDraftNames] = useState<Record<number, string>>({});
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'results' | 'graphs' | 'formulation'>('results');
+
+  const clearDraftAt = (idx: number) => {
+    setDraftNames((prev) => {
+      if (!(idx in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[idx];
+      return copy;
+    });
+  };
+
+  const commitVariableRename = (idx: number) => {
+    const raw = draftNames[idx];
+    if (raw === undefined) return;
+    const res = renameGoalProgrammingVariable({
+      variables,
+      hardConstraints,
+      goals,
+      index: idx,
+      rawNewName: raw,
+    });
+    clearDraftAt(idx);
+    if (!res.accepted) {
+      setRenameError(res.error);
+      return;
+    }
+    setRenameError(null);
+    setVariables(res.variables);
+    setHardConstraints(res.hardConstraints);
+    setGoals(res.goals);
+  };
+
+  const cancelVariableRename = (idx: number) => {
+    clearDraftAt(idx);
+    setRenameError(null);
+  };
 
   const addVariable = () => {
     const nextIdx = variables.length + 1;
     let name = `x${nextIdx}`;
-    while (variables.some((v) => v.name === name)) {
+    while (
+      variables.some((v) => v.name.trim().toLowerCase() === name.toLowerCase())
+    ) {
       name = `x${nextIdx}_${Math.floor(Math.random() * 100)}`;
     }
+    setDraftNames({});
+    setRenameError(null);
     setVariables((prev) => [
       ...prev,
       { name, lower_bound: 0, upper_bound: null, var_type: 'continuous' },
@@ -65,6 +107,8 @@ export const GoalProgrammingPage: React.FC = () => {
 
   const removeVariable = (idx: number) => {
     const removedName = variables[idx].name;
+    setDraftNames({});
+    setRenameError(null);
     setVariables((prev) => prev.filter((_, i) => i !== idx));
     setHardConstraints((prev) =>
       prev.map((hc) => {
@@ -239,34 +283,27 @@ export const GoalProgrammingPage: React.FC = () => {
             >
               <input
                 type="text"
-                value={v.name}
+                value={draftNames[idx] ?? v.name}
                 onChange={(e) => {
-                  const oldName = v.name;
-                  const newName = e.target.value.trim() || oldName;
-                  setVariables((prev) =>
-                    prev.map((item, i) => (i === idx ? { ...item, name: newName } : item))
-                  );
-                  if (oldName !== newName) {
-                    setHardConstraints((prev) =>
-                      prev.map((hc) => {
-                        const c = { ...hc.coefficients };
-                        c[newName] = c[oldName] ?? 0;
-                        delete c[oldName];
-                        return { ...hc, coefficients: c };
-                      })
-                    );
-                    setGoals((prev) =>
-                      prev.map((g) => {
-                        const c = { ...g.coefficients };
-                        c[newName] = c[oldName] ?? 0;
-                        delete c[oldName];
-                        return { ...g, coefficients: c };
-                      })
-                    );
+                  const nextDraft = e.target.value;
+                  setDraftNames((prev) => ({ ...prev, [idx]: nextDraft }));
+                  if (renameError) setRenameError(null);
+                }}
+                onBlur={() => commitVariableRename(idx)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitVariableRename(idx);
+                    e.currentTarget.blur();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelVariableRename(idx);
+                    e.currentTarget.blur();
                   }
                 }}
-                className="w-20 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs font-semibold text-slate-900"
+                className="w-20 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs font-semibold text-slate-900 focus:border-blue-500 focus:outline-none"
                 aria-label="Variable name"
+                title="Edit variable name (Enter or blur to apply, Esc to cancel)"
               />
               <input
                 type="number"
@@ -311,6 +348,15 @@ export const GoalProgrammingPage: React.FC = () => {
             </div>
           ))}
         </div>
+        {renameError && (
+          <div
+            role="alert"
+            className="mt-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-800"
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+            <span>{renameError}</span>
+          </div>
+        )}
       </section>
 
       {/* Hard Constraints */}
@@ -593,7 +639,7 @@ export const GoalProgrammingPage: React.FC = () => {
       {gpSolution && (
         <section className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200">
-            <div className="flex gap-1">
+            <div className="flex max-w-full flex-wrap gap-1 overflow-x-auto sm:flex-nowrap">
               {[
                 { id: 'results', label: 'Results & Deviations', icon: Table2 },
                 { id: 'graphs', label: 'Visualizations', icon: LineChart },
@@ -603,7 +649,7 @@ export const GoalProgrammingPage: React.FC = () => {
                   key={id}
                   type="button"
                   onClick={() => setActiveTab(id as typeof activeTab)}
-                  className={`inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                  className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                     activeTab === id
                       ? 'border-blue-600 text-blue-700'
                       : 'border-transparent text-slate-600 hover:text-slate-900'
@@ -768,7 +814,11 @@ export const GoalProgrammingPage: React.FC = () => {
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   {/* Target vs Achieved */}
                   <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                    <h4 className="mb-2 text-sm font-semibold text-slate-900">
+                      Goal Target vs. Achieved
+                    </h4>
                     <PlotlyChart
+                      height={320}
                       data={[
                         {
                           x: gpSolution.goal_results.map((g) => g.name),
@@ -786,10 +836,18 @@ export const GoalProgrammingPage: React.FC = () => {
                         },
                       ]}
                       layout={{
-                        title: { text: 'Goal Target vs. Achieved' },
                         barmode: 'group',
-                        xaxis: { title: 'Goal' },
-                        yaxis: { title: 'Value' },
+                        margin: { t: 24, r: 16, b: 56, l: 56 },
+                        legend: {
+                          orientation: 'h',
+                          x: 0,
+                          y: 1.02,
+                          xanchor: 'left',
+                          yanchor: 'bottom',
+                          font: { size: 11 },
+                        },
+                        xaxis: { title: 'Goal', automargin: true },
+                        yaxis: { title: 'Value', automargin: true },
                       }}
                     />
                   </div>

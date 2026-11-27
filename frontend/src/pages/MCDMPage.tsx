@@ -326,7 +326,7 @@ export const MCDMPage: React.FC = () => {
 
       {mcdmSolution && (
         <section className="space-y-6">
-          <div className="flex gap-1 border-b border-slate-200">
+          <div className="flex max-w-full flex-wrap gap-1 overflow-x-auto border-b border-slate-200 sm:flex-nowrap">
             {[
               { id: 'results', label: 'Rankings', icon: Table2 },
               { id: 'graphs', label: 'Visualizations', icon: LineChart },
@@ -336,7 +336,7 @@ export const MCDMPage: React.FC = () => {
                 key={id}
                 type="button"
                 onClick={() => setActiveTab(id as typeof activeTab)}
-                className={`inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                   activeTab === id
                     ? 'border-blue-600 text-blue-700'
                     : 'border-transparent text-slate-600 hover:text-slate-900'
@@ -389,7 +389,11 @@ export const MCDMPage: React.FC = () => {
 
           {activeTab === 'graphs' && (
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+              <h4 className="mb-2 text-sm font-semibold text-slate-900">
+                {mcdmSolution.method.toUpperCase()} Preference Scores
+              </h4>
               <PlotlyChart
+                height={340}
                 data={[
                   {
                     x: mcdmSolution.rankings.map((r) => r.alternative),
@@ -399,9 +403,9 @@ export const MCDMPage: React.FC = () => {
                   },
                 ]}
                 layout={{
-                  title: { text: `${mcdmSolution.method.toUpperCase()} Preference Scores` },
-                  xaxis: { title: 'Alternative' },
-                  yaxis: { title: 'Score', range: [0, 1] },
+                  margin: { t: 24, r: 16, b: 56, l: 56 },
+                  xaxis: { title: 'Alternative', automargin: true },
+                  yaxis: { title: 'Score', range: [0, 1], automargin: true },
                 }}
               />
             </div>
